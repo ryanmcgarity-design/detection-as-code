@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+.env
+.env.*
+docs/results.md

@@ -1,0 +1,5 @@
+*.json
+*.evtx
+*.zip
+*.gz
+!fetch.sh
