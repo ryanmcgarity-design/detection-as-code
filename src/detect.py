@@ -1,9 +1,17 @@
 """
-Detection layer: loads the APT3 dataset into SQLite, compiles Sigma rules via
-pySigma, runs each rule as a SQL query, and writes normalized matches to
-data/matches.json.
+Detection layer: loads a dataset into SQLite, compiles Sigma rules via pySigma,
+runs each rule as a SQL query, and writes normalized matches to an output file.
+
+Usage:
+    python src/detect.py                        # APT3 training set -> data/matches.json
+    python src/detect.py --dataset apt29_day1   # APT29 day 1 -> data/matches_apt29_day1.json
+    python src/detect.py --dataset apt29_day2   # APT29 day 2 -> data/matches_apt29_day2.json
+
+APT3 is the training/development dataset. APT29 is the held-out validation set
+used for independent recall measurement and LLM triage evaluation.
 """
 
+import argparse
 import glob
 import json
 import logging
@@ -21,9 +29,18 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 RULES_DIR = Path(__file__).parent.parent / "rules"
-DATASET = DATA_DIR / "empire_apt3_2019-05-14223117.json"
-OUTPUT = DATA_DIR / "matches.json"
 TABLE = "logs"
+
+DATASETS = {
+    "apt3": DATA_DIR / "empire_apt3_2019-05-14223117.json",
+    "apt29_day1": DATA_DIR / "apt29_evals_day1_manual_2020-05-01225525.json",
+    "apt29_day2": DATA_DIR / "apt29_evals_day2_manual_2020-05-02035409.json",
+}
+
+def output_path(dataset_key: str) -> Path:
+    if dataset_key == "apt3":
+        return DATA_DIR / "matches.json"
+    return DATA_DIR / f"matches_{dataset_key}.json"
 
 
 def load_events(path: Path) -> list[dict]:
@@ -57,10 +74,16 @@ def flatten_event(event: dict) -> dict:
             flat[k] = v
 
     flat.update(event.get("event_data", {}))
-    flat["Channel"] = event.get("log_name", "")
-    flat["EventID"] = event.get("event_id")
+
+    # Normalize to Sigma pipeline expected field names.
+    # APT3 (winlogbeat): channel in log_name, event id in event_id (lowercase).
+    # APT29 (nxlog/flat): Channel and EventID already top-level with correct names.
+    if not flat.get("Channel"):
+        flat["Channel"] = event.get("log_name", "")
+    if flat.get("EventID") is None:
+        flat["EventID"] = event.get("event_id")
     flat["TimeCreated"] = event.get("@timestamp", "")
-    flat["Computer"] = event.get("computer_name", "")
+    flat["Computer"] = flat.get("Computer") or flat.get("Hostname") or event.get("computer_name", "")
     return flat
 
 
@@ -143,20 +166,33 @@ def run_detections(conn: sqlite3.Connection, rules: list[tuple]) -> list[dict]:
     return matches
 
 
-def main():
-    if not DATASET.exists():
-        log.error("Dataset not found: %s — run data/fetch.sh first", DATASET)
+def main(dataset_key: str = "apt3") -> list[dict]:
+    dataset_path = DATASETS.get(dataset_key)
+    if dataset_path is None:
+        log.error("Unknown dataset '%s'. Valid: %s", dataset_key, list(DATASETS))
+        sys.exit(1)
+    if not dataset_path.exists():
+        log.error("Dataset not found: %s — run data/fetch.sh first", dataset_path)
         sys.exit(1)
 
-    events = load_events(DATASET)
+    events = load_events(dataset_path)
     conn = build_db(events)
     rules = compile_rules()
     matches = run_detections(conn, rules)
 
-    OUTPUT.write_text(json.dumps(matches, indent=2))
-    log.info("Matches written to %s", OUTPUT)
+    out = output_path(dataset_key)
+    out.write_text(json.dumps(matches, indent=2))
+    log.info("Matches written to %s", out)
     return matches
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dataset",
+        choices=list(DATASETS),
+        default="apt3",
+        help="Dataset to run detections against (default: apt3)",
+    )
+    args = parser.parse_args()
+    main(args.dataset)
