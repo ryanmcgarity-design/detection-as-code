@@ -1,0 +1,55 @@
+# Model configurations for triage benchmarking.
+#
+# backends:
+#   local_ollama  — http://localhost:11434/v1, no auth required
+#   remote_ollama — LLM_REMOTE_URL env var, optional LLM_REMOTE_KEY
+#   1min_ai       — NOT IMPLEMENTED YET (see src/backends/onemin.py)
+#
+# modes:
+#   tools  — OpenAI function calling (model must support it)
+#   react  — text-based Thought/Action/Observation loop (any model)
+#   auto   — try tools, fall back to react on error
+
+models:
+  - name: gemma4:31b-it-q4_K_M
+    backend: local_ollama
+    mode: tools
+    notes: "Gemma 4 31B Q4, fits 100% in GPU VRAM (28GB)"
+
+  # - name: gemma4-31b-q6k-xl
+  #   backend: local_ollama
+  #   mode: tools
+  #   notes: "Gemma 4 31B Q6 XL — 36GB loaded, 14% CPU offload, too slow"
+
+  - name: deckard-q6
+    backend: local_ollama
+    mode: tools
+    notes: "Gemma 4 31B DECKARD fine-tune, tool-capable"
+
+  - name: qwen3.6-27b-q6k-xl
+    backend: local_ollama
+    mode: react
+    notes: "Qwen3.6 27B dense, no native tool support"
+
+  # Remote Ollama — set LLM_REMOTE_URL to enable
+  # - name: some-remote-model
+  #   backend: remote_ollama
+  #   mode: auto
+
+  # 1min.ai — set ONEMIN_API_KEY to enable
+  # 1min.ai has no tool calling; always use react mode
+  # - name: deepseek-reasoner
+  #   backend: 1min_ai
+  #   mode: react
+  # - name: meta/llama-4-maverick-instruct
+  #   backend: 1min_ai
+  #   mode: react
+  # - name: gpt-4o
+  #   backend: 1min_ai
+  #   mode: react
+  # - name: claude-sonnet-4-6
+  #   backend: 1min_ai
+  #   mode: react
+  # - name: grok-4
+  #   backend: 1min_ai
+  #   mode: react
