@@ -2,6 +2,8 @@
 # One-command entrypoint: fetch data -> detect -> triage -> metrics
 set -euo pipefail
 
+export PYTHONPATH="${PYTHONPATH:-$(dirname "$0")}"
+
 echo "[1/4] Fetching dataset..."
 bash data/fetch.sh
 
