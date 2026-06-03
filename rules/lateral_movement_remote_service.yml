@@ -18,9 +18,8 @@ detection:
         CommandLine|contains|all:
             - ' create '
             - 'binPath='
-    remote:
-        CommandLine|re: '\\\\[A-Za-z0-9_\-]+'
-    condition: selection and remote
+            - '\\'
+    condition: selection
 falsepositives:
     - Legitimate remote administration and software deployment
     - SCCM, Ansible, or other orchestration tools

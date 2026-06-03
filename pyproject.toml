@@ -13,6 +13,10 @@ dependencies = [
     "pyyaml>=6.0.1",
     "requests>=2.32.0",
     "rich>=13.7.0",
+    "pysigma>=0.10.10",
+    "pysigma-backend-sqlite>=0.1.1",
+    "pysigma-pipeline-windows>=1.1.1",
+    "pysigma-pipeline-sysmon>=1.0.3",
 ]
 
 [project.optional-dependencies]
