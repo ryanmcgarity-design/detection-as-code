@@ -6,6 +6,7 @@ All LLM output is validated against these schemas before use.
 Malformed or hallucinated output is caught here and routed to the fallback.
 """
 
+import re
 from enum import Enum
 from typing import Optional
 
@@ -82,8 +83,10 @@ class QueryTool(BaseModel):
         forbidden = ("INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "ATTACH")
         if not normalized.startswith("SELECT"):
             raise ValueError("Only SELECT queries are permitted.")
+        # Word-boundary match so a forbidden keyword as a *substring* of a column
+        # name does not trip the filter — e.g. "CREATE" inside "TimeCreated".
         for keyword in forbidden:
-            if keyword in normalized:
+            if re.search(rf"\b{keyword}\b", normalized):
                 raise ValueError(f"Forbidden keyword in query: {keyword}")
         return v.strip()
 
