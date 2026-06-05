@@ -214,6 +214,26 @@ Rules:
 Return ONLY the SQL query — no markdown fences, no explanation, no commentary.
 """
 
+SYSTEM_PROMPT_REVIEWER = """\
+You are a skeptical SOC reviewer auditing another analyst's triage conclusion for
+hallucination. You are given (a) the analyst's verdict and (b) the COMPLETE set of
+evidence records they actually retrieved — nothing else exists.
+
+Your job: check that every CONCRETE factual claim in the verdict — usernames,
+hostnames, process/image names, parent processes, command lines, timestamps — is
+directly supported by a record in the evidence. Assume the analyst may have invented
+or misremembered specifics. A claim is "unsupported" if no retrieved record backs it.
+Do NOT flag general reasoning or ATT&CK technique opinions — only concrete factual
+claims that the evidence does not show.
+
+Respond with ONLY this JSON (no other text):
+{
+  "grounded": <true if every concrete claim is supported, else false>,
+  "unsupported_claims": ["<specific claim not backed by any evidence record>", ...]
+}
+If everything checks out, return grounded=true with an empty list.
+"""
+
 EVIDENCE_TOOL_DEF = {
     "type": "function",
     "function": {
@@ -440,6 +460,7 @@ def _triage_tools_loop(
 
 EVIDENCE_MAX_CHARS = 4000  # hard cap on evidence returned to the analyst per question
 FINAL_ANSWER_RETRIES = 2   # re-prompts for the JSON verdict before falling back
+GROUNDING_ROUNDS = 2       # adversarial review -> challenge-back-to-analyst rounds
 
 
 def _extract_sql(raw: str) -> str:
@@ -525,30 +546,29 @@ def _triage_evidence_loop(
     conn: sqlite3.Connection,
     schema_block: str,
     queries_run: list[str],
+    evidence_log: list[tuple[str, str]],
 ) -> tuple[Optional[TriageResult], Optional[str]]:
     """Analyst loop: reasons in English, calls get_evidence; the SQL-writer role
-    handles all SQL. Returns (result, fallback_reason)."""
+    handles all SQL. Records each (question, evidence) into evidence_log for the
+    adversarial grounding review. Returns (result, fallback_reason)."""
     question_counts: dict[str, int] = {}
     call_n = 0
     final_retries = 0
-    force_no_think = False
     while True:
         call_n += 1
-        create_kwargs = dict(
+        response = client.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
             tools=[EVIDENCE_TOOL_DEF],
             tool_choice="auto",
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
+            # Thinking off for the analyst: tool-selection turns barely think
+            # anyway, and the *verdict* turn otherwise burns the whole budget on
+            # hidden CoT and emits empty. Off → it answers directly.
+            extra_body={"think": False},
             timeout=LLM_TIMEOUT,
         )
-        if force_no_think:
-            # gemma4 sometimes burns the whole turn on hidden thinking and emits
-            # an empty final answer — force a direct response on the retry.
-            create_kwargs["extra_body"] = {"think": False}
-            force_no_think = False
-        response = client.chat.completions.create(**create_kwargs)
         usage = getattr(response, "usage", None)
         if usage:
             log.info(
@@ -576,6 +596,7 @@ def _triage_evidence_loop(
                 else:
                     log.info("Evidence q=%r", question[:100])
                     content = _get_evidence(client, question, conn, schema_block, queries_run)
+                    evidence_log.append((question, content))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -585,23 +606,86 @@ def _triage_evidence_loop(
 
         result = _parse_triage_result(msg.content or "", queries_run)
         if result is not None:
+            # Record the verdict turn so a grounding round can re-prompt cleanly.
+            messages.append({"role": "assistant", "content": msg.content or ""})
             return result, None
-        # Empty / unparseable final answer (gemma4 thinking ate the turn, or a
-        # stochastic empty). Re-prompt for the JSON verdict with thinking off,
-        # a couple of times, before giving up to the deterministic fallback.
+        # Empty / unparseable final answer (stochastic gemma4 empty even with
+        # thinking off). Re-prompt for the JSON verdict before falling back.
         if final_retries < FINAL_ANSWER_RETRIES:
             final_retries += 1
-            log.warning("Empty/invalid final answer — retrying (%d/%d) with thinking off",
+            log.warning("Empty/invalid final answer — retrying (%d/%d)",
                         final_retries, FINAL_ANSWER_RETRIES)
             messages.append({
                 "role": "user",
                 "content": ("Respond NOW with ONLY the JSON verdict object described in your "
                             "instructions — no thinking, no preamble, no other text."),
             })
-            force_no_think = True
             continue
         _dump_failure(messages, msg.content or "", queries_run)
         return None, "LLM returned unparseable or invalid output"
+
+
+def _grounding_challenge(unsupported: list[str]) -> str:
+    bullets = "\n".join(f"- {c}" for c in unsupported[:8])
+    return (
+        "A reviewer audited your verdict against ONLY the evidence you actually "
+        "retrieved and flagged these claims as unsupported by any record:\n"
+        f"{bullets}\n\n"
+        "Either call get_evidence to retrieve records that support these claims, or "
+        "revise your verdict to remove/correct anything the evidence does not show. "
+        "Then respond with ONLY your final JSON verdict."
+    )
+
+
+def _adversarial_review(
+    client: OpenAI,
+    alert_core: str,
+    result: TriageResult,
+    evidence_log: list[tuple[str, str]],
+) -> Optional[dict]:
+    """Skeptic pass: are the verdict's concrete claims actually supported by the
+    evidence the analyst retrieved? Returns {'grounded', 'unsupported_claims'} or
+    None on error/no-evidence (treated as 'cannot challenge')."""
+    if not evidence_log:
+        return None
+    transcript = "\n\n".join(f"Q: {q}\nEVIDENCE: {ev}" for q, ev in evidence_log)
+    verdict_text = (
+        f"VERDICT\nsummary: {result.summary}\n"
+        f"technique: {result.technique} ({result.technique_name})\n"
+        f"verdict: {result.verdict} | priority: {result.priority} | confidence: {result.confidence}\n"
+        f"reasoning: {result.reasoning}"
+    )
+    user = (
+        f"{alert_core}\n\n{verdict_text}\n\n"
+        f"=== EVIDENCE THE ANALYST RETRIEVED (the only data that exists) ===\n{transcript}"
+    )
+    try:
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_REVIEWER},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+            max_tokens=1024,
+            extra_body={"think": False},
+            timeout=LLM_TIMEOUT,
+        )
+        raw = response.choices[0].message.content or ""
+    except Exception as e:
+        log.warning("Adversarial review failed: %s", e)
+        return None
+    start = raw.find("{")
+    if start == -1:
+        return None
+    try:
+        data, _ = json.JSONDecoder().raw_decode(raw[start:])
+    except Exception:
+        return None
+    return {
+        "grounded": bool(data.get("grounded", True)),
+        "unsupported_claims": [str(c) for c in (data.get("unsupported_claims") or [])],
+    }
 
 
 def _triage_react_loop(
@@ -684,10 +768,28 @@ def triage_match(
             {"role": "system", "content": SYSTEM_PROMPT_ANALYST},
             {"role": "user", "content": alert_core},
         ]
+        evidence_log: list[tuple[str, str]] = []
         try:
             triage_result, fallback_reason = _triage_evidence_loop(
-                client, messages, conn, schema_writer, queries_run
+                client, messages, conn, schema_writer, queries_run, evidence_log
             )
+            # Adversarial grounding: a skeptic checks the verdict's concrete claims
+            # against the retrieved evidence; unsupported claims are challenged back
+            # to the analyst to revise (or to go gather supporting evidence).
+            for rnd in range(1, GROUNDING_ROUNDS + 1):
+                if triage_result is None:
+                    break
+                review = _adversarial_review(client, alert_core, triage_result, evidence_log)
+                if not review or review["grounded"] or not review["unsupported_claims"]:
+                    break
+                log.warning("Grounding round %d — unsupported: %s", rnd, review["unsupported_claims"])
+                messages.append({
+                    "role": "user",
+                    "content": _grounding_challenge(review["unsupported_claims"]),
+                })
+                triage_result, fallback_reason = _triage_evidence_loop(
+                    client, messages, conn, schema_writer, queries_run, evidence_log
+                )
         except Exception as e:
             fallback_reason = f"LLM error: {type(e).__name__}: {e}"
             log.warning("LLM call failed for rule=%s: %s", match.get("rule"), e)

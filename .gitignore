@@ -9,3 +9,6 @@ dist/
 .env
 .env.*
 docs/results.md
+
+# dataset archives (large binaries — keep out of git)
+*.zip
