@@ -651,16 +651,18 @@ def _get_evidence(
     conn: sqlite3.Connection,
     schema_block: str,
     queries_run: list[str],
+    client=None,
 ) -> str:
     """SQL-writer role: translate one English question -> SELECT, run it, shape it.
-    Runs as an isolated conversation; logs the SQL for audit (queries_run)."""
+    Runs as an isolated conversation; logs the SQL for audit (queries_run). Goes
+    through the backend-agnostic dispatch so the writer runs on whatever backend the
+    analyst does (local Ollama, remote Ollama, or 1min.ai)."""
     writer_messages = [
         {"role": "system", "content": SYSTEM_PROMPT_SQL_WRITER + "\n\nSCHEMA:\n" + schema_block},
         {"role": "user", "content": f"Analyst request: {question}"},
     ]
     try:
-        data = _ollama_chat(writer_messages, temperature=SQL_WRITER_TEMPERATURE)
-        raw = (data.get("message") or {}).get("content") or ""
+        raw = _llm_chat(writer_messages, client, temperature=SQL_WRITER_TEMPERATURE)
     except Exception as e:
         return f"Could not generate a query ({type(e).__name__}). Rephrase the request."
     sql = _extract_sql(raw)
@@ -774,7 +776,7 @@ def _triage_evidence_loop(
         question = _extract_question(content)
         if question:
             log.info("Evidence q=%r", question[:100])
-            ev = _get_evidence(question, conn, schema_block, queries_run)
+            ev = _get_evidence(question, conn, schema_block, queries_run, client)
             evidence_log.append((question, ev))
             directives = None  # a reviewer directive is consumed once acted on
             continue
@@ -807,7 +809,7 @@ def _grounding_challenge(unsupported: list[str]) -> str:
         "A reviewer audited your verdict against ONLY the evidence you actually "
         "retrieved and flagged these claims as unsupported by any record:\n"
         f"{bullets}\n\n"
-        "Either call get_evidence to retrieve records that support these claims, or "
+        "Either ask a QUESTION to retrieve records that support these claims, or "
         "revise your verdict to remove/correct anything the evidence does not show. "
         "Then respond with ONLY your final JSON verdict."
     )
@@ -817,10 +819,12 @@ def _adversarial_review(
     alert_core: str,
     result: TriageResult,
     evidence_log: list[tuple[str, str]],
+    client=None,
 ) -> Optional[dict]:
     """Skeptic pass: are the verdict's concrete claims actually supported by the
     evidence the analyst retrieved? Returns {'grounded', 'unsupported_claims'} or
-    None on error/no-evidence (treated as 'cannot challenge')."""
+    None on error/no-evidence (treated as 'cannot challenge'). Runs on the same
+    backend as the analyst via the dispatch."""
     if not evidence_log:
         return None
     transcript = "\n\n".join(f"Q: {q}\nEVIDENCE: {ev}" for q, ev in evidence_log)
@@ -835,14 +839,14 @@ def _adversarial_review(
         f"=== EVIDENCE THE ANALYST RETRIEVED (the only data that exists) ===\n{transcript}"
     )
     try:
-        data = _ollama_chat(
+        raw = _llm_chat(
             [
                 {"role": "system", "content": SYSTEM_PROMPT_REVIEWER},
                 {"role": "user", "content": user},
             ],
+            client,
             temperature=LLM_TEMPERATURE,
         )
-        raw = (data.get("message") or {}).get("content") or ""
     except Exception as e:
         log.warning("Adversarial review failed: %s", e)
         return None
@@ -970,7 +974,7 @@ def triage_match(
             for rnd in range(1, GROUNDING_ROUNDS + 1):
                 if triage_result is None:
                     break
-                review = _adversarial_review(alert_core, triage_result, evidence_log)
+                review = _adversarial_review(alert_core, triage_result, evidence_log, client)
                 if not review or review["grounded"] or not review["unsupported_claims"]:
                     break
                 grounding_rounds = rnd
