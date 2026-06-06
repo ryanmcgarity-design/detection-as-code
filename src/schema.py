@@ -19,10 +19,26 @@ class Priority(str, Enum):
     LOW = "low"
 
 
-class Verdict(str, Enum):
+class Verdict(str, Enum):  # legacy (kept for back-compat)
     TRUE_POSITIVE = "true_positive"
     LIKELY_FALSE_POSITIVE = "likely_false_positive"
     UNCERTAIN = "uncertain"
+
+
+class Disposition(str, Enum):
+    """The triage conclusion — answers 'did bad occur?'."""
+    MALICIOUS_TRUE_POSITIVE = "malicious_true_positive"   # real, and malicious — bad occurred
+    BENIGN_TRUE_POSITIVE = "benign_true_positive"         # activity is real but benign — no bad
+    FALSE_POSITIVE = "false_positive"                     # the detection was wrong — no bad
+    UNCERTAIN = "uncertain"                               # cannot conclude from available evidence
+
+
+class Scope(BaseModel):
+    """Blast radius — populated only when bad occurred (malicious_true_positive)."""
+    systems: list[str] = Field(default_factory=list, description="Affected hostnames.")
+    users: list[str] = Field(default_factory=list, description="Involved user accounts.")
+    data: str = Field(default="", description="Data or assets touched, if any.")
+    timeframe: str = Field(default="", description="Time window of the activity.")
 
 
 class TriageResult(BaseModel):
@@ -39,20 +55,33 @@ class TriageResult(BaseModel):
     )
     confidence: float = Field(
         ge=0.0, le=1.0,
-        description="Confidence that this is a true positive (0.0-1.0)."
+        description="Confidence in the disposition (0.0-1.0)."
     )
-    priority: Priority = Field(
-        description="Recommended analyst priority: high, medium, or low."
-    )
-    verdict: Verdict = Field(
-        description="true_positive, likely_false_positive, or uncertain."
+    disposition: Disposition = Field(
+        description="Did bad occur? malicious_true_positive | benign_true_positive | false_positive | uncertain."
     )
     reasoning: str = Field(
-        description="Explanation of the verdict, citing specific evidence from log queries."
+        description="Justification for the disposition, citing specific evidence retrieved."
+    )
+    scope: Scope = Field(
+        default_factory=Scope,
+        description="Blast radius (systems/users/data/timeframe) — fill only when malicious_true_positive."
+    )
+    escalate: bool = Field(
+        default=False,
+        description="Does this warrant escalation to an incident?"
+    )
+    escalation_rationale: str = Field(
+        default="",
+        description="Why this should or should not be escalated."
+    )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        description="Next steps handed to the responders (the analyst's product)."
     )
     queries_run: list[str] = Field(
         default_factory=list,
-        description="SQL queries the model ran during investigation (for auditability)."
+        description="SQL queries run during investigation (for auditability)."
     )
 
     @field_validator("technique")

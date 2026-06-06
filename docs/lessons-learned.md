@@ -148,6 +148,85 @@ Lesson: **a re-quant or re-package is not behavior-equivalent.** Validate the ex
 artifact end-to-end (loads, stops cleanly, output parses) before trusting it — don't
 assume "same model, smaller quant" behaves the same.
 
+## 9. Never carry the model's `thinking` scratchpad forward in history
+
+A native assistant response can include a `thinking` field (the hidden
+chain-of-thought) alongside `content` and `tool_calls`. When the analyst made a
+tool call, we appended the **raw** native message back into the conversation —
+dragging that ~1.3k-char thinking block forward with it.
+
+The damage showed up a turn later. On a `think=False` recovery turn (forcing the
+final JSON verdict), the presence of a *historical* thinking block corrupted
+generation: the model emitted ~68 tokens that vanished and returned
+**empty `content`** (`done_reason: stop`, not `length` — so it looked like a clean
+empty, not a truncation). That empty fell through to the deterministic fallback.
+The correct verdict was reachable the whole time; the history was poisoning the
+model with its own discarded scratchpad.
+
+Proven by replaying the exact dumped `messages` array two ways: with the stale
+`thinking` field → empty; with it stripped → a clean, parseable, **correct**
+verdict. One model's fallback flipped to a correct `malicious_true_positive` from
+this single change.
+
+Lesson: **the `thinking` field is the model's private scratchpad for one turn, not
+conversation.** When you append an assistant message to history, keep only
+`role`, `content`, and `tool_calls` — drop `thinking`. Carrying it forward bloats
+context at best and silently corrupts later turns at worst. (Corollary, learned the
+hard way here: `think:false` was *not* broken on the endpoint — a probe with a clean
+history answered fine. **Reproduce the failure with a minimal input before blaming
+the model or the API.** The bug was ours.)
+
+**Second, independent trigger — and the robust remedy.** Stripping `thinking` fixed
+the short-history case but a longer one (4 tool-call rounds, two ~4 KB tool results)
+*still* emptied on the recovery turn. Dump replay isolated it: `think=False` over a
+history containing **multiple empty-content assistant tool-call turns** empties this
+model — even with no `thinking` field present and a large token budget. The same
+history with thinking left **on** produced the verdict fine. So `think=False` is
+fragile in proportion to how many tool-call turns precede it.
+
+Don't try to make the polluted history work. **Recover with a clean closing call:**
+rebuild a minimal conversation — system prompt + the original task + all gathered
+evidence rendered as plain text — and ask only for the final structured answer. It
+has zero tool-call turns, so it sidesteps *both* empty-output triggers and recovered
+reliably in every replay (and in both think modes). General principle: **when an
+agent's live history won't yield the final answer, don't keep poking the history —
+collapse what you learned into a fresh, minimal prompt and ask once more.**
+
+## 10. Absence of evidence is its own failure mode
+
+We built an adversarial reviewer to catch hallucination: it checks every concrete
+claim in the verdict against the records the analyst actually retrieved. It works —
+*when there are records*. Its blind spot: it can only **refute claims against
+evidence**, so "no evidence retrieved" reads as "no claims to dispute," and the
+verdict sails through.
+
+A small model exploited this exactly: it returned a confident (0.95) `benign`
+disposition on a real attack having run **zero** evidence queries — pure
+confabulation from training priors — and the grounding pass waved it through
+because there was nothing to check against.
+
+Lesson: **a decisive conclusion reached with no evidence is unsupported by
+construction** — it's the *most* dangerous output (confident and ungrounded), not
+the safest. Check for it separately from claim-level grounding: if the agent reaches
+a decisive verdict (anything but "uncertain") with an empty evidence log, force it
+back to investigate before accepting the answer. Don't let "nothing to refute" mean
+"nothing wrong."
+
+## 11. Separate process failures from reasoning failures before blaming the model
+
+Three wrong answers in our model sweep looked like three dumb models. Two were
+**harness bugs**, fixable in code with the model untouched:
+- a token-budget runaway whose recovery was sabotaged by the stale `thinking` field
+  (§9) — *not* the model failing to reason;
+- a zero-evidence confabulation that grounding was blind to (§10) — a missing guard,
+  *not* the model being incapable.
+
+Only one was a genuine reasoning miss. Without per-alert capture (the evidence trail,
+grounding rounds, and a full failure dump) you can't tell these apart — and you'll
+"fix" the wrong thing (swap models, raise temperature) while the real bug persists.
+**Triage your agent's failures the way you'd triage an alert: get the evidence first,
+then attribute cause.**
+
 ---
 
 ## Appendix — the config that worked (for reference, not gospel)
@@ -161,3 +240,7 @@ assume "same model, smaller quant" behaves the same.
 - SQL guard: read-only, word-boundary keyword filter, single statement.
 - Final-answer retry: ×2 with thinking off before deterministic fallback.
 - Keep the model resident (no unload/reload); the client owns context.
+- **When appending an assistant message to history, keep only `role`/`content`/
+  `tool_calls` — strip `thinking`** (§9).
+- **Zero-evidence guard:** a decisive verdict with an empty evidence log is forced
+  back to investigate (×2) before it's accepted (§10).

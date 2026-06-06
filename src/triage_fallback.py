@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from src.schema import Priority, TriageResult, Verdict
+from src.schema import Disposition, Priority, TriageResult
 
 log = logging.getLogger(__name__)
 
@@ -82,8 +82,9 @@ def fallback_triage(match: dict, reason: str) -> TriageResult:
     rule_info = meta.get(rule_stem, {})
 
     level = rule_info.get("level", "medium")
-    priority = _level_to_priority(level)
     technique_id, technique_name = _extract_technique(rule_info.get("techniques", []))
+    # Conservative escalation: if we couldn't triage a high-severity rule, escalate.
+    escalate = level.lower() in ("critical", "high")
 
     log.info("Fallback triage for rule=%s reason=%s", rule_stem, reason)
 
@@ -96,8 +97,14 @@ def fallback_triage(match: dict, reason: str) -> TriageResult:
         technique=technique_id,
         technique_name=technique_name,
         confidence=0.5,
-        priority=priority,
-        verdict=Verdict.UNCERTAIN,
-        reasoning=f"LLM triage unavailable ({reason}). Priority derived from Sigma rule level '{level}'.",
+        disposition=Disposition.UNCERTAIN,
+        reasoning=f"LLM triage unavailable ({reason}); cannot determine if bad occurred. Sigma rule level '{level}'.",
+        escalate=escalate,
+        escalation_rationale=(
+            f"Automated triage failed on a '{level}' rule — escalating conservatively for manual review."
+            if escalate else
+            f"Automated triage failed; rule level '{level}' — flag for manual analyst review."
+        ),
+        recommended_actions=["Manual analyst review required — automated triage failed."],
         queries_run=[],
     )

