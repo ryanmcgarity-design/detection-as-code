@@ -1110,6 +1110,13 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
     case_file = runs_dir / f"{safe_model}__{dataset_key}.json"
     case_file.write_text(json.dumps(cases, indent=2, default=str))
     log.info("Triage results -> %s ; case corpus -> %s", out, case_file)
+    # Cost report for remote credit-metered backends (1min.ai).
+    if hasattr(client, "cost_summary"):
+        c = client.cost_summary()
+        log.info("1min.ai run cost: %s credits | %s calls | %s in / %s out tokens "
+                 "(%.0f credits/alert avg)",
+                 c["credits"], c["calls"], c["input_tokens"], c["output_tokens"],
+                 c["credits"] / n if n else 0)
     return records
 
 

@@ -56,9 +56,16 @@ class OneminClient:
             raise ValueError("ONEMIN_API_KEY env var is not set")
         self.api_key = api_key
         self.headers = {"API-KEY": api_key, "Content-Type": "application/json"}
+        # Cost accounting — the API returns per-call credits + tokens in
+        # aiRecord.metadata. We sum them so a whole triage run reports its cost.
+        self.total_credits = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.calls = 0
 
     def chat(self, model: str, messages: list[dict]) -> str:
-        """Send a conversation to 1min.ai and return the assistant's reply."""
+        """Send a conversation to 1min.ai and return the assistant's reply.
+        Accumulates per-call credit/token cost from aiRecord.metadata."""
         prompt = _flatten_messages(messages)
         r = requests.post(
             f"{ONEMIN_BASE_URL}/api/chat-with-ai",
@@ -72,10 +79,30 @@ class OneminClient:
         )
         r.raise_for_status()
         data = r.json()
-        status = data.get("aiRecord", {}).get("status")
+        rec = data.get("aiRecord", {})
+        status = rec.get("status")
         if status != "SUCCESS":
             raise ValueError(f"1min.ai API returned status: {status} | body: {r.text[:300]}")
-        return data["aiRecord"]["aiRecordDetail"]["resultObject"][0]
+        meta = rec.get("metadata", {}) or {}
+        credit = meta.get("credit", 0) or 0
+        in_tok = meta.get("inputToken", 0) or 0
+        out_tok = meta.get("outputToken", 0) or 0
+        self.total_credits += credit
+        self.total_input_tokens += in_tok
+        self.total_output_tokens += out_tok
+        self.calls += 1
+        log.info("1min.ai %s: %s credits (in=%s out=%s tok) | run total=%s credits over %s calls",
+                 model, credit, in_tok, out_tok, self.total_credits, self.calls)
+        return rec["aiRecordDetail"]["resultObject"][0]
+
+    def cost_summary(self) -> dict:
+        """Totals for the run so far (for logging after a triage batch)."""
+        return {
+            "credits": self.total_credits,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "calls": self.calls,
+        }
 
 
 def _flatten_messages(messages: list[dict]) -> str:
