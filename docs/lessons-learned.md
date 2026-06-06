@@ -17,8 +17,9 @@ writes plausible-but-wrong queries, drowns its own context, and confabulates.
 Decompose into roles, even if it's the **same model** with two prompts:
 
 - **Analyst** — reasons in plain language, decides what to find out, asks for it in
-  natural language (`get_evidence("the parent process and user of X")`). Never sees
-  SQL or the schema.
+  natural language ("the parent process and user of X"). Never sees SQL or the schema.
+  (We carry the ask as a plain-text `QUESTION:` line, not a native tool call — see §12
+  for why that's more robust.)
 - **Specialist** — a narrow, mechanical translator (natural language → one SELECT),
   pinned to the schema, deterministic, returns shaped results.
 
@@ -192,6 +193,10 @@ reliably in every replay (and in both think modes). General principle: **when an
 agent's live history won't yield the final answer, don't keep poking the history —
 collapse what you learned into a fresh, minimal prompt and ask once more.**
 
+> Epilogue: this whole section is a patch for failures that only exist because of the
+> tool-call message history. We later made *every* turn a fresh, minimal restate (§12),
+> which removed the failure modes by construction — and retired both patches above.
+
 ## 10. Absence of evidence is its own failure mode
 
 We built an adversarial reviewer to catch hallucination: it checks every concrete
@@ -227,20 +232,58 @@ grounding rounds, and a full failure dump) you can't tell these apart — and yo
 **Triage your agent's failures the way you'd triage an alert: get the evidence first,
 then attribute cause.**
 
+## 12. Prefer a flattened text protocol over native tool-calling for agent loops
+
+§9 and §10 were patches for failures that *originated in the native tool-call
+representation* — the accumulating empty-content assistant tool-call turns that the
+chat template chokes on. The structural fix was to stop using that representation at
+all.
+
+Because the client owns the conversation (§4), an agent loop doesn't need to grow a
+tool-call message history. Each turn can be a **fresh, flattened restate**: one call
+of `[system, user]` where the user message is the task + the running evidence ledger
+as plain text, and the model replies with either `QUESTION: <plain english>` (the
+worker answers, you append the result to the ledger) or its final structured answer.
+ReAct, essentially — but the point here is what it *removes*:
+
+- **The tool-call empty-output failure modes vanish by construction** — there are no
+  empty-content assistant turns and no `thinking` field to carry forward (§9). On our
+  worst-affected model, this took it from "needs three fixes to reach 3/3" to "3/3
+  with none of them." We then deleted those two patches.
+- **Any instruction-following model works** — no native tool-calling required. This is
+  what lets the same loop run on small local models *and* remote / non-tool-calling
+  endpoints (we point it at a custom REST API by swapping one backend dispatch).
+- **You control the exact bytes the model sees each turn**, so thinking on/off,
+  ledger trimming, and reviewer directives are all just text you compose.
+
+The cost: re-sending the ledger every turn loses the tool-call path's server-side
+prefix caching, so wall-clock rises with investigation depth (we saw 1.7–3.3× on
+smaller models; ~1× on the model that was already re-eval-bound). The lever when you
+need the speed back is to **trim or summarize the echoed ledger** — keep the latest
+evidence verbatim and compress older turns. Accuracy was same-or-better across every
+model in our sweep, so the trade bought robustness and model-portability for latency.
+
+Reach for native tool-calling when you need its structured-call guarantees or the
+model is specifically tuned for it; reach for the flattened protocol when you want
+robustness, debuggability, and the freedom to run any model.
+
 ---
 
 ## Appendix — the config that worked (for reference, not gospel)
 
-| Role | temp | thinking | max_tokens | notes |
-|------|------|----------|-----------|-------|
-| Analyst (reasoner) | 0.5 | on | 8192 | calls `get_evidence`; retry verdict w/ thinking off on empty |
-| SQL-writer (specialist) | 0.0 | **off** | 2048 | schema-pinned w/ real sample values; never `SELECT *` |
+| Role | temp | thinking | notes |
+|------|------|----------|-------|
+| Analyst (reasoner) | 0.5 | on | flattened text loop — emits `QUESTION:` or final JSON; fresh restate each turn |
+| SQL-writer (specialist) | 0.0 | **off** | schema-pinned w/ real sample values; never `SELECT *` |
 
+- Loop: fresh-restate each turn (no accumulating tool-call history); bound rounds, then
+  force a final verdict (§12).
 - Result shaping: ≤20 rows **and** ≤4000 chars; explicit "0 rows"; no silent truncation.
 - SQL guard: read-only, word-boundary keyword filter, single statement.
-- Final-answer retry: ×2 with thinking off before deterministic fallback.
 - Keep the model resident (no unload/reload); the client owns context.
-- **When appending an assistant message to history, keep only `role`/`content`/
-  `tool_calls` — strip `thinking`** (§9).
 - **Zero-evidence guard:** a decisive verdict with an empty evidence log is forced
-  back to investigate (×2) before it's accepted (§10).
+  back to investigate before it's accepted (§10) — kept; representation-independent.
+- Backend-agnostic chat dispatch: local native API / remote OpenAI-compatible / custom
+  REST, selected by one env var — the flattened loop runs on all three.
+- *Retired with the flatten (§12):* the stale-`thinking` strip and the clean-closing-
+  call recovery (§9) — both were tool-call-history artifacts that no longer exist.

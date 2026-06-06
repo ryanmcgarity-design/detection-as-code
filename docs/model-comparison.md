@@ -15,9 +15,10 @@ the authoritative MITRE/OTRF APT3 emulation playbook (`src/ground_truth.py`).
   | A2 | `net localgroup Administrators` | T1069 Permission Groups Discovery |
   | A3 | `net user /domain` | T1087 Account Discovery |
 
-- **Pipeline:** evidence mode — Analyst (plain-English `get_evidence`) + SQL-writer
-  (schema-pinned translator) + adversarial grounding reviewer. See
-  [lessons-learned.md](lessons-learned.md).
+- **Pipeline:** evidence mode — Analyst (asks for evidence in plain English) +
+  SQL-writer (schema-pinned translator) + adversarial grounding reviewer. The initial
+  sweep used native tool-calling for the analyst's questions; it was later flattened to
+  a text protocol (below). See [lessons-learned.md](lessons-learned.md).
 - **Context:** 32K KV cache (`num_ctx=32768`), native Ollama `/api/chat`.
 - **Scoring:** the disposition is collapsed to the one bit triage must answer —
   *did bad occur?* `malicious_true_positive` → bad; `benign_true_positive` /
@@ -92,8 +93,43 @@ E4B's score is unchanged by strict accuracy (it's a weak model), but the *danger
 failure mode is gone: it no longer confidently dismisses a real attack with zero
 evidence — it now escalates as uncertain. That's the intended effect of the guard.
 
-> **Next:** the analyst's native tool-calling transport is being replaced with a
-> flattened text protocol (no tool-calling) — this structurally removes the empty-output
-> triggers above and enables non-tool-calling / remote models. Fixes #1 and #3 retire
-> with that change; the zero-evidence guard, runaway cap, SQL guards, and grounding stay.
-> Sweep numbers will be re-run on the flattened loop.
+## Flattened text-protocol sweep (no tool-calling)
+
+The analyst's native tool-calling transport was then replaced with a flattened text
+protocol (ReAct-style `QUESTION:` / final-JSON, fresh-restate-each-turn — see
+lessons-learned.md §12). Same models, same 3 alerts, same 32K KV.
+
+| Model | Tool-call (orig → post-fix) | **Flattened** | Time (tool-call → flattened) |
+|-------|-----------------------------|---------------|------------------------------|
+| gemma4:12b-it-q8_0      | 3/3 | **3/3 (100%)** | 1334s → 2311s |
+| gemma4:31b-it-q4_K_M    | 3/3 | **3/3 (100%)** | 1732s → 1705s |
+| gemma4:26b-a4b-it-q8_0  | 2/3 → 3/3 | **3/3 (100%)** | 915s → 1786s |
+| gemma4:e4b-it-q8_0      | 1/3 | **2/3 (67%)** | 164s → 536s |
+
+Per-alert (flattened): A1 ✅ all four · A2 ✅ all four · A3 — only E4B wrong
+(`false_positive` on a real attack); 12B/26B/31B all ✅. Cross-model:
+agree+correct 2, **agree+WRONG (shared blind spot) 0**, disagree 1 (A3).
+
+### What the flattened sweep showed
+
+1. **Flattening removed the bug class — it didn't just patch it.** 26B-A4B needed all
+   three fixes (stale-`thinking`, zero-evidence, closing-call) to reach 3/3 on
+   tool-calling. On the flattened loop it hits **3/3 with none of that machinery** —
+   the empty-output triggers came *from* the tool-call history, which no longer
+   exists. Fixes #1 (thinking-strip) and #3 (closing-call) were reverted; the
+   zero-evidence guard, runaway cap, SQL guards, and grounding stayed (they're logic,
+   not protocol patches).
+2. **Accuracy matched or beat tool-calling on every model** — E4B 1/3→2/3, the rest
+   held at 3/3. The lone miss (E4B A3) is a weak-model reasoning miss, not an
+   architecture failure.
+3. **Bonus: no tool-calling anywhere → any instruction-following model works**,
+   including non-tool-calling and remote models (1min.ai).
+4. **Cost is wall-clock, and uneven.** The smaller/mid models slowed most (E4B 3.3×,
+   12B 1.7×, 26B-A4B ~2×); the 31B was ~unchanged (it was already re-eval-bound from
+   deep multi-round investigation). Source: fresh-restate re-sends the growing
+   evidence ledger every turn, losing the tool-call path's prefix caching. Optimization
+   lever when wanted: trim/summarize the echoed ledger.
+
+**Bottom line:** the no-tool-calling redesign is same-or-better on accuracy across all
+four models, removed two fixes' worth of complexity, and unlocks remote models — at a
+wall-clock cost that's recoverable.
