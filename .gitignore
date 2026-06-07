@@ -11,3 +11,6 @@ dist/
 
 # dataset archives (large binaries — keep out of git)
 *.zip
+
+# local agent/editor state — never commit personal Claude Code config/session data
+.claude/

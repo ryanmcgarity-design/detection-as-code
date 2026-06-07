@@ -1055,7 +1055,8 @@ def triage_match(
     return TriageRecord(**match, triage=triage_result, fallback_used=False)
 
 
-def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageRecord]:
+def main(dataset_key: str = "apt3", limit: Optional[int] = None,
+         resume: bool = False) -> list[TriageRecord]:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     matches_file = output_path(dataset_key)
@@ -1087,8 +1088,38 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
     case_file = runs_dir / f"{safe_model}__{dataset_key}.json"
 
     records: list[TriageRecord] = [None] * n
-    cases: list[dict] = []
+    # Identity-keyed, merge-not-clobber output so `--resume` continues a run instead of
+    # restarting from alert 1. Key = (rule, timestamp): present identically in both the
+    # match and the saved case record, and unique per alert. Outputs are always emitted
+    # in match order. Without --resume this behaves exactly as before (empty maps).
+    def _akey(m: dict) -> tuple:
+        return (m.get("rule"), m.get("timestamp"))
+    out_by_key: dict = {}    # key -> record model_dump
+    case_by_key: dict = {}   # key -> durable case dict
+    if resume and case_file.exists():
+        prior_cases = json.loads(case_file.read_text())
+        prior_out = json.loads(out.read_text()) if out.exists() else []
+        for k, c in enumerate(prior_cases):
+            key = (c.get("rule"), c.get("timestamp"))
+            case_by_key[key] = c
+            if k < len(prior_out):
+                out_by_key[key] = prior_out[k]
+        log.info("Resume: %d/%d alerts already complete — skipping them",
+                 len(case_by_key), n)
+
+    def _flush() -> None:
+        done = [m for m in matches if _akey(m) in case_by_key]
+        out.write_text(json.dumps(
+            [out_by_key[_akey(m)] for m in done if _akey(m) in out_by_key], indent=2))
+        case_file.write_text(json.dumps(
+            [case_by_key[_akey(m)] for m in done], indent=2, default=str))
+
     for i, match in enumerate(matches):
+        key = _akey(match)
+        if key in case_by_key:
+            log.info("[%d/%d] SKIP (resume, already done): %s — %s",
+                     i + 1, n, match["rule"], match["timestamp"])
+            continue
         conn = build_db(events)
         log.info("[%d/%d] Triaging: %s — %s", i + 1, n, match["rule"], match["timestamp"])
         capture: dict = {}
@@ -1108,7 +1139,8 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
         # outcome + the ground-truth label (from ground_truth.py, never the LLM).
         gt_malicious = is_malicious_process_creation(
             match.get("image", ""), match.get("command_line", ""))
-        cases.append({
+        out_by_key[key] = record.model_dump()
+        case_by_key[key] = {
             "model": LLM_MODEL,
             "dataset": dataset_key,
             **record.model_dump(),
@@ -1117,13 +1149,12 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
             "grounding_rounds": capture.get("grounding_rounds", 0),
             "grounding_unsupported": capture.get("grounding_unsupported", []),
             "zero_evidence_rounds": capture.get("zero_evidence_rounds", 0),
-        })
+        }
 
-        # Checkpoint after every alert — overwrite both outputs with progress so far.
-        # Cheap at this scale (n≈25, small files); makes a long run crash-resilient.
-        out.write_text(json.dumps(
-            [r.model_dump() for r in records if r is not None], indent=2))
-        case_file.write_text(json.dumps(cases, indent=2, default=str))
+        # Checkpoint after every alert — merge-not-clobber, emitted in match order.
+        # Cheap at this scale (n≈25, small files); makes a long run crash-resilient
+        # AND resumable (--resume skips the keys already present here).
+        _flush()
 
     log.info("Triage results -> %s ; case corpus -> %s", out, case_file)
     # Cost report for remote credit-metered backends (1min.ai).
@@ -1150,7 +1181,12 @@ if __name__ == "__main__":
         help="Override LLM_MODE env var for this run",
     )
     parser.add_argument("--limit", type=int, default=None, help="Only triage the first N matches")
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Skip alerts already present in the per-model case corpus and continue; "
+             "merges into the existing outputs instead of restarting from alert 1.",
+    )
     args = parser.parse_args()
     if args.mode:
         LLM_MODE = args.mode
-    main(args.dataset, limit=args.limit)
+    main(args.dataset, limit=args.limit, resume=args.resume)
