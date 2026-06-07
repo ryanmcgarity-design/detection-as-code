@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""SQL-writer isolation harness.
+
+Question: can a small local model (e.g. gemma4:e4b) do the *mechanical* SQL-writer
+role well enough to feed a strong analyst? Cost analysis shows the SQL-writer is only
+5-21% of tokens, so moving it to a cheap local model is attractive IF its SQL holds up.
+The risk is silent wrong-evidence (valid SQL, wrong rows) that poisons the analyst.
+
+This harness exercises the REAL SQL-writer code path (`triage._get_evidence`: same
+system prompt, schema grounding with sample values, SQL extraction, execution, shaping)
+on each candidate model, over a fixed set of REAL analyst questions mined from the
+durable per-model corpus JSONs. For each question it also has a known-good REFERENCE
+query (the SQL a trusted model produced for that exact question), so it can score:
+
+  generated  : model emitted a SQL statement at all
+  valid      : that SQL executes without error
+  nonempty   : it returns >=1 row (weak relevance proxy)
+  match      : its result set EXACTLY equals the reference query's result set
+  overlap    : Jaccard of result rows vs reference (partial credit)
+
+`match`/`overlap` are the load-bearing metrics — they catch plausible-but-wrong SQL
+that `valid`+`nonempty` miss.
+
+NOTE: this loads models into VRAM, so run it AFTER the main sweep finishes (it would
+otherwise contend with the 3090). Local backend only.
+
+Usage:
+  uv run python scripts/sqlwriter_isolation.py \
+      --models gemma4:e4b-it-q8_0,gemma4:12b-it-q8_0 [--dataset apt3] [--n 25]
+"""
+import argparse
+import glob
+import json
+import logging
+import time
+from pathlib import Path
+
+import src.triage as t
+from src.detect import DATASETS, build_db, load_events
+
+# Trust order for picking the reference SQL when the same question appears in
+# multiple corpora — strongest/most-thorough models first.
+REF_PRIORITY = [
+    "claude-opus", "gemma4_31b", "gemma4_12b", "deepseek", "gpt-oss",
+    "gemma4_26b", "meta_llama", "gemma4_e4b",
+]
+
+
+def _file_rank(name: str) -> int:
+    for i, tag in enumerate(REF_PRIORITY):
+        if tag in name:
+            return i
+    return len(REF_PRIORITY)
+
+
+def mine_questions(limit=None):
+    """Mine distinct (question, reference_sql, rule) from corpus JSONs, attaching the
+    reference SQL from the highest-trust model that answered that question."""
+    by_q: dict[str, dict] = {}
+    files = sorted(glob.glob("data/runs/*__apt3.json"), key=lambda f: _file_rank(Path(f).name))
+    for fp in files:
+        try:
+            recs = json.load(open(fp))
+        except Exception:
+            continue
+        for r in (recs if isinstance(recs, list) else [recs]):
+            trail = r.get("evidence_trail", []) or []
+            sqls = (r.get("triage", {}) or {}).get("queries_run", []) or []
+            for idx, ev in enumerate(trail):
+                q = (ev.get("question") or "").strip()
+                if not q:
+                    continue
+                key = q.lower()
+                ref_sql = sqls[idx] if idx < len(sqls) else None
+                if key not in by_q:  # first writer wins = highest trust (sorted)
+                    by_q[key] = {"question": q, "ref_sql": ref_sql,
+                                 "rule": r.get("rule"), "ref_src": Path(fp).name}
+                elif by_q[key]["ref_sql"] is None and ref_sql:
+                    by_q[key]["ref_sql"] = ref_sql
+                    by_q[key]["ref_src"] = Path(fp).name
+    out = list(by_q.values())
+    return out[:limit] if limit else out
+
+
+def _result_set(conn, sql):
+    """Execute sql; return (ok, frozenset_of_rows, err)."""
+    if not sql:
+        return False, None, "no sql"
+    try:
+        cur = conn.execute(sql)
+        rows = frozenset(tuple(r) for r in cur.fetchall())
+        return True, rows, None
+    except Exception as e:
+        return False, None, f"{type(e).__name__}: {e}"
+
+
+def run_model(model, questions, conn, schema_writer):
+    t.LLM_MODEL = model
+    t.LLM_BACKEND = "local_ollama"
+    rows = []
+    for i, item in enumerate(questions, 1):
+        q = item["question"]
+        queries_run: list[str] = []
+        t0 = time.time()
+        call_err = None
+        try:
+            t._get_evidence(q, conn, schema_writer, queries_run, client=None)
+        except Exception as e:
+            call_err = f"{type(e).__name__}: {e}"
+        dt = time.time() - t0
+        sql = queries_run[-1] if queries_run else None
+
+        ok, cand_rows, exec_err = _result_set(conn, sql)
+        ref_ok, ref_rows, _ = _result_set(conn, item.get("ref_sql"))
+
+        match = overlap = None
+        if ok and ref_ok:
+            match = (cand_rows == ref_rows)
+            union = cand_rows | ref_rows
+            overlap = (len(cand_rows & ref_rows) / len(union)) if union else 1.0
+
+        rows.append({
+            "i": i, "rule": item.get("rule"), "question": q,
+            "sql": sql, "ref_sql": item.get("ref_sql"), "ref_src": item.get("ref_src"),
+            "generated": sql is not None, "valid": ok,
+            "nrows": (len(cand_rows) if ok else None),
+            "ref_comparable": ref_ok,
+            "match": match, "overlap": (round(overlap, 2) if overlap is not None else None),
+            "exec_err": exec_err if not ok else None,
+            "call_err": call_err, "secs": round(dt, 1),
+        })
+        print(f"  [{i}/{len(questions)}] gen={sql is not None} valid={ok} "
+              f"rows={len(cand_rows) if ok else '-'} match={match} ov={overlap if overlap is None else round(overlap,2)} {dt:.1f}s")
+    return rows
+
+
+def score(model, rows):
+    n = len(rows)
+    g = sum(r["generated"] for r in rows)
+    v = sum(1 for r in rows if r["valid"])
+    ne = sum(1 for r in rows if r["valid"] and (r["nrows"] or 0) > 0)
+    comp = [r for r in rows if r["match"] is not None]
+    m = sum(1 for r in comp if r["match"])
+    ov = (sum(r["overlap"] for r in comp) / len(comp)) if comp else None
+    return {
+        "model": model, "n": n,
+        "generated_rate": round(g / n, 3) if n else 0,
+        "valid_rate": round(v / n, 3) if n else 0,
+        "nonempty_rate": round(ne / n, 3) if n else 0,
+        "n_comparable": len(comp),
+        "exact_match_rate": round(m / len(comp), 3) if comp else None,
+        "avg_overlap": round(ov, 3) if ov is not None else None,
+        "avg_secs": round(sum(r["secs"] for r in rows) / n, 1) if n else 0,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--models", required=True, help="comma-separated ollama model tags")
+    ap.add_argument("--dataset", default="apt3")
+    ap.add_argument("--n", type=int, default=None, help="limit number of questions")
+    args = ap.parse_args()
+
+    logging.basicConfig(level=logging.WARNING)  # silence per-call INFO
+
+    questions = mine_questions(args.n)
+    withref = sum(1 for q in questions if q["ref_sql"])
+    print(f"Mined {len(questions)} distinct questions ({withref} with a reference query)")
+
+    events = load_events(DATASETS[args.dataset])
+    conn = build_db(events)
+    schema_writer = t._get_schema_for_writer(conn)
+
+    out = {"dataset": args.dataset, "questions": questions, "results": {}, "scores": []}
+    for model in [m.strip() for m in args.models.split(",") if m.strip()]:
+        print(f"\n=== {model} ===")
+        rows = run_model(model, questions, conn, schema_writer)
+        out["results"][model] = rows
+        s = score(model, rows)
+        out["scores"].append(s)
+        print(f"  -> gen={s['generated_rate']:.0%} valid={s['valid_rate']:.0%} "
+              f"nonempty={s['nonempty_rate']:.0%} match={s['exact_match_rate']} "
+              f"overlap={s['avg_overlap']} avg={s['avg_secs']}s")
+
+    outp = Path("data/runs/sqlwriter_isolation.json")
+    outp.write_text(json.dumps(out, indent=2))
+    print(f"\nWrote {outp}")
+    print("\n=== SCORECARD ===")
+    hdr = f"{'model':<26}{'gen':>6}{'valid':>7}{'nonemp':>8}{'match':>7}{'overlap':>9}{'avg_s':>7}"
+    print(hdr)
+    for s in out["scores"]:
+        print(f"{s['model']:<26}{s['generated_rate']:>6.0%}{s['valid_rate']:>7.0%}"
+              f"{s['nonempty_rate']:>8.0%}"
+              f"{(format(s['exact_match_rate'],'.0%') if s['exact_match_rate'] is not None else '-'):>7}"
+              f"{(s['avg_overlap'] if s['avg_overlap'] is not None else '-')!s:>9}"
+              f"{s['avg_secs']:>7}")
+
+
+if __name__ == "__main__":
+    main()

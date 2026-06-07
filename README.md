@@ -195,6 +195,13 @@ A rigorous evaluation — and a more realistic detection architecture — would 
   entity over time* (risk-based alerting): accumulation across alerts is detection
   logic, not LLM memory.
 - Scaling to APT29 and the full APT3 set, plus scope-accuracy scoring.
+- **A schema-bounded evidence-assembly playbook** — replacing the generative per-turn
+  analyst loop with *ask-every-data-bound-question → assemble all available evidence →
+  confine a cheap local LLM to the gestalt did-bad judgment*, with a grounding gate for
+  soundness and explicit reporting of absent telemetry. Rides on a mature
+  detection/meta-detection layer; validating its benign-closure path is gated on the
+  class-balanced eval above. Design note, supporting measurements, and a recorded
+  adversarial critique in [docs/triage-methodology.md](docs/triage-methodology.md).
 
 ---
 
