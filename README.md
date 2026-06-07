@@ -142,9 +142,18 @@ _Full 25-alert triage numbers are populated after the run completes._
 
 **Ground truth:** scored against the OTRF/MITRE APT3 operator playbook
 (`data/ground_truth/apt3_attack_steps.json`, built from the published Mordor
-playbook). Of the 25 matched alerts, **24 are true positives and 1 is a false
-positive** (`whoami /groups` — the rule over-fires versus the documented `/all`
-step).
+playbook). Of the 25 matched alerts (the triage eval set), **24 are true positives
+and 1 is a false positive** (`whoami /groups` — the rule over-fires versus the
+documented `/all` step).
+
+> Two scoring lenses, deliberately kept distinct: the **detection layer**
+> ([docs/results.md](docs/results.md)) scores *events* against the playbook with a
+> conservative known-benign-images set (precision 100%, recall 22.1% — our 8 rules
+> target a focused slice of the campaign, not full coverage; the `whoami /groups`
+> case is *excluded* there as ambiguous rather than counted as a benign FP). The
+> **triage layer** below scores *per-alert dispositions* across the 25 matches,
+> where that same case is the lone negative — which is exactly why this set can't
+> measure specificity (see Limitations).
 
 ---
 
