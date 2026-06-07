@@ -691,10 +691,6 @@ def _extract_question(text: str) -> Optional[str]:
     return q or None
 
 
-LEDGER_FULL_BLOCKS = 3          # most-recent evidence blocks kept verbatim
-LEDGER_OLD_EVIDENCE_CHARS = 220  # older blocks: keep question + this much of the result
-
-
 def _render_analyst_state(
     alert_core: str,
     evidence_log: list[tuple[str, str]],
@@ -705,24 +701,16 @@ def _render_analyst_state(
     accumulating assistant/tool messages), so there's no tool-call history to corrupt
     later turns and no model state to manage — the client owns the conversation.
 
-    Ledger shrink: the loop re-sends this state every turn, so a growing full ledger
-    means input tokens climb each turn — the dominant cost on metered backends and the
-    main wall-clock cost locally. We keep the most recent LEDGER_FULL_BLOCKS evidence
-    blocks verbatim and condense older ones to the question + a short head of the
-    result. The question stays visible (so the analyst doesn't re-ask) and the full
-    evidence is still retained in evidence_log for the grounding reviewer."""
+    The full ledger is re-sent each turn, so input tokens grow with investigation
+    depth — the dominant cost on metered backends and the main wall-clock cost
+    locally. A ledger-shrink experiment (condense older blocks to a head) was tried
+    and reverted: on gpt-oss-120b it dropped the evidence detail the verdict relied
+    on and flipped a correct call to wrong, for only a modest cost saving. If revisited,
+    do it at the evidence-shaping layer (fewer rows/cols in the big dumps), not here."""
     parts = [alert_core, "", "=== EVIDENCE GATHERED SO FAR ==="]
     if evidence_log:
-        cutoff = len(evidence_log) - LEDGER_FULL_BLOCKS
         for i, (q, ev) in enumerate(evidence_log, 1):
-            if i <= cutoff:
-                head = ev[:LEDGER_OLD_EVIDENCE_CHARS]
-                ell = (" …[earlier result condensed to save space — already gathered, "
-                       "ask again only if you need the full specifics]"
-                       if len(ev) > LEDGER_OLD_EVIDENCE_CHARS else "")
-                parts.append(f"[Q{i}] {q}\n→ {head}{ell}")
-            else:
-                parts.append(f"[Q{i}] {q}\n→ {ev}")
+            parts.append(f"[Q{i}] {q}\n→ {ev}")
     else:
         parts.append("(none yet — you have not gathered any evidence)")
     for d in (directives or []):
