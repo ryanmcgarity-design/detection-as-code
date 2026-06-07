@@ -1077,6 +1077,15 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
     client = _make_client()
     n = len(matches)
 
+    # Output paths set up BEFORE the loop so results can be checkpointed to disk
+    # after every alert — a long run that dies mid-way (e.g. a GPU dropping off the
+    # bus) then keeps every completed alert instead of losing the whole batch.
+    out = DATA_DIR / f"triage_{dataset_key}.json"
+    runs_dir = DATA_DIR / "runs"
+    runs_dir.mkdir(exist_ok=True)
+    safe_model = re.sub(r"[^A-Za-z0-9._-]", "_", LLM_MODEL)
+    case_file = runs_dir / f"{safe_model}__{dataset_key}.json"
+
     records: list[TriageRecord] = [None] * n
     cases: list[dict] = []
     for i, match in enumerate(matches):
@@ -1110,15 +1119,12 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
             "zero_evidence_rounds": capture.get("zero_evidence_rounds", 0),
         })
 
-    # Back-compat single-file output (latest run)
-    out = DATA_DIR / f"triage_{dataset_key}.json"
-    out.write_text(json.dumps([r.model_dump() for r in records], indent=2))
-    # Durable per-model case corpus — does NOT overwrite other models' runs.
-    runs_dir = DATA_DIR / "runs"
-    runs_dir.mkdir(exist_ok=True)
-    safe_model = re.sub(r"[^A-Za-z0-9._-]", "_", LLM_MODEL)
-    case_file = runs_dir / f"{safe_model}__{dataset_key}.json"
-    case_file.write_text(json.dumps(cases, indent=2, default=str))
+        # Checkpoint after every alert — overwrite both outputs with progress so far.
+        # Cheap at this scale (n≈25, small files); makes a long run crash-resilient.
+        out.write_text(json.dumps(
+            [r.model_dump() for r in records if r is not None], indent=2))
+        case_file.write_text(json.dumps(cases, indent=2, default=str))
+
     log.info("Triage results -> %s ; case corpus -> %s", out, case_file)
     # Cost report for remote credit-metered backends (1min.ai).
     if hasattr(client, "cost_summary"):
