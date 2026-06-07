@@ -57,10 +57,13 @@ class OneminClient:
         self.api_key = api_key
         self.headers = {"API-KEY": api_key, "Content-Type": "application/json"}
         # Cost accounting — the API returns per-call credits + tokens in
-        # aiRecord.metadata. We sum them so a whole triage run reports its cost.
+        # aiRecord.metadata. We sum them so a whole triage run reports its cost,
+        # splitting input vs output credits so we can derive per-token rates.
         self.total_credits = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.total_input_credits = 0
+        self.total_output_credits = 0
         self.calls = 0
 
     def chat(self, model: str, messages: list[dict]) -> str:
@@ -87,20 +90,32 @@ class OneminClient:
         credit = meta.get("credit", 0) or 0
         in_tok = meta.get("inputToken", 0) or 0
         out_tok = meta.get("outputToken", 0) or 0
+        in_cr = meta.get("inputCredit", 0) or 0
+        out_cr = meta.get("outputCredit", 0) or 0
         self.total_credits += credit
         self.total_input_tokens += in_tok
         self.total_output_tokens += out_tok
+        self.total_input_credits += in_cr
+        self.total_output_credits += out_cr
         self.calls += 1
-        log.info("1min.ai %s: %s credits (in=%s out=%s tok) | run total=%s credits over %s calls",
-                 model, credit, in_tok, out_tok, self.total_credits, self.calls)
+        log.info("1min.ai %s: %s credits (in=%s/%s out=%s/%s tok/cr) | "
+                 "run total=%s credits over %s calls",
+                 model, credit, in_tok, in_cr, out_tok, out_cr, self.total_credits, self.calls)
         return rec["aiRecordDetail"]["resultObject"][0]
 
     def cost_summary(self) -> dict:
-        """Totals for the run so far (for logging after a triage batch)."""
+        """Totals for the run so far (for logging after a triage batch). Includes
+        split input/output credits so per-token rates can be derived:
+        in_rate = input_credits/input_tokens, out_rate = output_credits/output_tokens."""
+        it, ot = self.total_input_tokens, self.total_output_tokens
         return {
             "credits": self.total_credits,
-            "input_tokens": self.total_input_tokens,
-            "output_tokens": self.total_output_tokens,
+            "input_tokens": it,
+            "output_tokens": ot,
+            "input_credits": self.total_input_credits,
+            "output_credits": self.total_output_credits,
+            "credits_per_input_token": round(self.total_input_credits / it, 4) if it else None,
+            "credits_per_output_token": round(self.total_output_credits / ot, 4) if ot else None,
             "calls": self.calls,
         }
 

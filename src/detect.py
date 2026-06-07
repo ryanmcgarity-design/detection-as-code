@@ -83,7 +83,8 @@ def flatten_event(event: dict) -> dict:
     if flat.get("EventID") is None:
         flat["EventID"] = event.get("event_id")
     flat["TimeCreated"] = event.get("@timestamp", "")
-    flat["Computer"] = flat.get("Computer") or flat.get("Hostname") or event.get("computer_name", "")
+    flat["Computer"] = (flat.get("Computer") or flat.get("Hostname")
+                        or event.get("computer_name", ""))
     return flat
 
 

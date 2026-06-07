@@ -98,10 +98,12 @@ def fallback_triage(match: dict, reason: str) -> TriageResult:
         technique_name=technique_name,
         confidence=0.5,
         disposition=Disposition.UNCERTAIN,
-        reasoning=f"LLM triage unavailable ({reason}); cannot determine if bad occurred. Sigma rule level '{level}'.",
+        reasoning=(f"LLM triage unavailable ({reason}); cannot determine if bad "
+                   f"occurred. Sigma rule level '{level}'."),
         escalate=escalate,
         escalation_rationale=(
-            f"Automated triage failed on a '{level}' rule — escalating conservatively for manual review."
+            f"Automated triage failed on a '{level}' rule — "
+            f"escalating conservatively for manual review."
             if escalate else
             f"Automated triage failed; rule level '{level}' — flag for manual analyst review."
         ),

@@ -3,10 +3,7 @@ Tests for the detection layer. Runs against a small in-memory fixture so CI
 does not need the full 28MB dataset.
 """
 
-import json
-import sqlite3
 
-import pytest
 
 from src.detect import build_db, compile_rules, flatten_event, run_detections
 

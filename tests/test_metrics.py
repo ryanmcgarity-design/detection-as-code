@@ -5,7 +5,6 @@ import pytest
 from src.ground_truth import is_malicious_process_creation, label_event
 from src.metrics import score_detection
 
-
 # --- Ground truth labeling ---
 
 @pytest.mark.parametrize("image,cmd,expected", [
@@ -14,28 +13,30 @@ from src.metrics import score_detection
     (r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
      "powershell.exe -encodedCommand SQBFAFgA", True),
     (r"C:\Windows\system32\whoami.exe",
-     "whoami.exe /all /fo list", True),
-    (r"C:\Windows\system32\whoami.exe",
-     "whoami.exe /groups", True),
+     "whoami.exe /all /fo list", True),  # documented APT3 step (T1033)
     (r"C:\Windows\system32\ipconfig.exe",
-     "ipconfig.exe /all", True),
+     "ipconfig.exe /all", True),  # documented (T1016)
     (r"C:\Windows\system32\cmd.exe",
-     r"cmd.exe /c C:\windows\system32\autoupdate.vbs", True),
+     r"cmd.exe /c C:\windows\system32\autoupdate.vbs", True),  # dropped artifact
     (r"C:\Windows\System32\WScript.exe",
-     r'"C:\Windows\System32\WScript.exe" "C:\Users\user\Downloads\payload.vbs"', True),
-    (r"C:\WINDOWS\system32\sc.exe",
-     r'sc.exe \\HFDC01 create AdobeUpdater binPath= "cmd.exe /c payload.exe"', True),
+     r'"C:\Windows\System32\WScript.exe" "C:\windows\autoupdate.vbs"', True),  # real artifact
+    (r"C:\WINDOWS\system32\sc.exe",  # service-install lateral movement (T1050)
+     r'sc.exe \\HFDC01 create AdobeUpdater binPath= "cmd.exe /c '
+     r'C:\Users\pgustavo\AppData\Roaming\Adobe\Flash Player\autoupdate.vbs"', True),
     (r"C:\Windows\system32\net.exe",
-     'net.exe group "Domain Admins" /domain', True),
-    # Benign cases
+     'net.exe group "Domain Admins" /domain', True),  # documented (T1069)
+    (r"C:\Windows\system32\net.exe",
+     "net.exe start", True),  # documented APT3 service recon (T1007)
+    # Benign / undocumented — playbook-based ground truth is conservative:
+    # activity that doesn't match a documented operator step is NOT labeled malicious.
     (r"C:\Windows\system32\svchost.exe",
      "svchost.exe -k netsvcs", False),
     (r"C:\Windows\system32\whoami.exe",
-     "whoami.exe", False),  # no enum flags
-    (r"C:\Windows\system32\net.exe",
-     "net.exe start", False),  # no /domain or group enum
+     "whoami.exe", False),  # bare whoami — not the documented /all step
+    (r"C:\Windows\system32\whoami.exe",
+     "whoami.exe /groups", False),  # the documented FP: rule over-fires vs the /all step
     (r"C:\Windows\system32\ipconfig.exe",
-     "ipconfig.exe", False),  # no /all
+     "ipconfig.exe", False),  # no /all — not the documented step
 ])
 def test_is_malicious_process_creation(image, cmd, expected):
     assert is_malicious_process_creation(image, cmd) == expected

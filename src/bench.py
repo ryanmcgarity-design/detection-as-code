@@ -159,7 +159,8 @@ def run_bench(dataset_key: str = "apt3", sample_size: int = 5, filter_model: str
 
     # Print summary table
     print("\n=== BENCHMARK SUMMARY ===")
-    print(f"{'Model':<35} {'Mode':<8} {'Fallback%':<12} {'AvgConf':<10} {'AvgLatency':<12} {'AvgQueries'}")
+    print(f"{'Model':<35} {'Mode':<8} {'Fallback%':<12} "
+          f"{'AvgConf':<10} {'AvgLatency':<12} {'AvgQueries'}")
     print("-" * 90)
     for s in summary:
         print(

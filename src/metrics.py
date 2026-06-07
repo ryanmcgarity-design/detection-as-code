@@ -145,9 +145,12 @@ def score_triage(records: list[dict]) -> dict:
                 bad_correct += 1
         (conf_correct if is_correct else conf_wrong).append(conf)
         rows.append({"cmd": (r.get("command_line", "") or "")[:48], "gt": gt,
-                     "llm": disp or llm, "conf": conf, "fallback": is_fallback, "correct": is_correct})
+                     "llm": disp or llm, "conf": conf, "fallback": is_fallback,
+                     "correct": is_correct})
 
-    avg = lambda xs: round(sum(xs) / len(xs), 3) if xs else None
+    def avg(xs):
+        return round(sum(xs) / len(xs), 3) if xs else None
+
     return {
         "n": n,
         "verdict_accuracy": round(correct / n, 4) if n else 0.0,
@@ -166,7 +169,8 @@ def print_triage_scorecard(m: dict, label: str = "") -> None:
     print(f"\n=== Triage quality {('['+label+'] ') if label else ''}(n={m['n']}) ===")
     print(f"  verdict_accuracy : {acc:.1%}")
     print(f"  TP recall        : {m['tp_recall']}   TP precision: {m['tp_precision']}")
-    print(f"  uncertain_rate   : {m['uncertain_rate']:.1%}   fallback_rate: {m['fallback_rate']:.1%}")
+    print(f"  uncertain_rate   : {m['uncertain_rate']:.1%}   "
+          f"fallback_rate: {m['fallback_rate']:.1%}")
     print(f"  conf(correct)    : {m['avg_conf_correct']}   conf(wrong): {m['avg_conf_wrong']}")
     print("  per-alert:")
     for r in m["rows"]:
@@ -206,17 +210,22 @@ def compare_models(case_files: list[Path]) -> dict:
         all_agree = len(set(verdicts.values())) == 1
         all_correct = all(d["correct"] for d in permodel.values())
         if all_agree and all_correct:
-            cat = "agree+correct"; agree_correct += 1
+            cat = "agree+correct"
+            agree_correct += 1
         elif all_agree:
-            cat = "agree+WRONG"; agree_wrong += 1
+            cat = "agree+WRONG"
+            agree_wrong += 1
         else:
-            cat = "disagree"; disagree += 1
-        rows.append({"cmd": key.split("|", 1)[-1][:48], "gt": gt, "verdicts": verdicts, "category": cat})
+            cat = "disagree"
+            disagree += 1
+        rows.append({"cmd": key.split("|", 1)[-1][:48], "gt": gt,
+                     "verdicts": verdicts, "category": cat})
 
     per_model_accuracy = {}
     for m in models:
         items = [d[m] for d in runs.values() if m in d]
-        per_model_accuracy[m] = round(sum(x["correct"] for x in items) / len(items), 4) if items else None
+        per_model_accuracy[m] = (
+            round(sum(x["correct"] for x in items) / len(items), 4) if items else None)
 
     return {"models": models, "n_alerts": len(runs),
             "agree_correct": agree_correct, "agree_wrong": agree_wrong, "disagree": disagree,
@@ -227,7 +236,8 @@ def print_model_comparison(c: dict) -> None:
     print(f"\n=== Cross-model comparison ({len(c['models'])} models, {c['n_alerts']} alerts) ===")
     for m, acc in c["per_model_accuracy"].items():
         print(f"  accuracy[{m}] = {acc if acc is None else f'{acc:.1%}'}")
-    print(f"  agree+correct: {c['agree_correct']}   agree+WRONG (blind spot): {c['agree_wrong']}   disagree: {c['disagree']}")
+    print(f"  agree+correct: {c['agree_correct']}   "
+          f"agree+WRONG (blind spot): {c['agree_wrong']}   disagree: {c['disagree']}")
     print("  per-alert:")
     for r in c["rows"]:
         print(f"    [{r['category']:13s}] gt={r['gt']:21s} {r['verdicts']}  {r['cmd']}")
@@ -306,8 +316,10 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--triage", help="Score a triage results JSON (e.g. data/triage_apt3.json)")
-    parser.add_argument("--label", default="", help="Label for the triage scorecard (e.g. model name)")
+    parser.add_argument("--triage",
+                        help="Score a triage results JSON (e.g. data/triage_apt3.json)")
+    parser.add_argument("--label", default="",
+                        help="Label for the triage scorecard (e.g. model name)")
     parser.add_argument("--compare", action="store_true",
                         help="Cross-model comparison over the per-model corpus in data/runs/")
     args = parser.parse_args()

@@ -8,11 +8,10 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from src.schema import Priority, QueryTool, TriageResult, Verdict
-from src.triage_fallback import fallback_triage
-from src.triage import _execute_query, _parse_triage_result, triage_match
 from src.detect import build_db
-
+from src.schema import Disposition, QueryTool, TriageResult
+from src.triage import _execute_query, _parse_triage_result, triage_match
+from src.triage_fallback import fallback_triage
 
 # --- Schema validation ---
 
@@ -22,9 +21,9 @@ def test_triage_result_valid():
         technique="T1059.001",
         technique_name="PowerShell",
         confidence=0.9,
-        priority=Priority.HIGH,
-        verdict=Verdict.TRUE_POSITIVE,
+        disposition=Disposition.MALICIOUS_TRUE_POSITIVE,
         reasoning="Encoded command with Empire flags",
+        escalate=True,
         queries_run=["SELECT * FROM logs LIMIT 1"],
     )
     assert result.technique == "T1059.001"
@@ -34,8 +33,7 @@ def test_triage_result_valid():
 def test_triage_result_technique_normalized():
     result = TriageResult(
         summary="x", technique="t1059.001", technique_name="PS",
-        confidence=0.5, priority=Priority.LOW,
-        verdict=Verdict.UNCERTAIN, reasoning="x",
+        confidence=0.5, disposition=Disposition.UNCERTAIN, reasoning="x",
     )
     assert result.technique == "T1059.001"
 
@@ -45,7 +43,7 @@ def test_triage_result_invalid_confidence():
         TriageResult(
             summary="x", technique="T1059.001", technique_name="PS",
             confidence=1.5,  # out of range
-            priority=Priority.HIGH, verdict=Verdict.TRUE_POSITIVE, reasoning="x",
+            disposition=Disposition.MALICIOUS_TRUE_POSITIVE, reasoning="x",
         )
 
 
@@ -53,16 +51,14 @@ def test_triage_result_invalid_technique():
     with pytest.raises(ValidationError):
         TriageResult(
             summary="x", technique="notATechnique", technique_name="PS",
-            confidence=0.5, priority=Priority.MEDIUM,
-            verdict=Verdict.UNCERTAIN, reasoning="x",
+            confidence=0.5, disposition=Disposition.UNCERTAIN, reasoning="x",
         )
 
 
 def test_triage_result_unknown_technique_allowed():
     result = TriageResult(
         summary="x", technique="unknown", technique_name="unknown",
-        confidence=0.3, priority=Priority.LOW,
-        verdict=Verdict.UNCERTAIN, reasoning="x",
+        confidence=0.3, disposition=Disposition.UNCERTAIN, reasoning="x",
     )
     assert result.technique == "unknown"
 
@@ -146,14 +142,15 @@ SAMPLE_MATCH = {
 def test_fallback_returns_triage_result():
     result = fallback_triage(SAMPLE_MATCH, reason="test")
     assert isinstance(result, TriageResult)
-    assert result.verdict == Verdict.UNCERTAIN
-    assert result.priority in (Priority.HIGH, Priority.MEDIUM, Priority.LOW)
+    assert result.disposition == Disposition.UNCERTAIN
+    assert isinstance(result.escalate, bool)
+    assert result.recommended_actions  # fallback always hands off for manual review
 
 
-def test_fallback_high_priority_for_high_rule():
+def test_fallback_escalates_for_high_rule():
     match = {**SAMPLE_MATCH, "rule": "powershell_suspicious_launch_flags"}
     result = fallback_triage(match, reason="no llm")
-    assert result.priority == Priority.HIGH
+    assert result.escalate is True
 
 
 def test_no_llm_uses_fallback():
@@ -168,7 +165,7 @@ def test_no_llm_uses_fallback():
         record = triage_match(SAMPLE_MATCH, conn, None, schema)
         assert record.fallback_used is True
         assert record.triage is not None
-        assert record.triage.verdict == Verdict.UNCERTAIN
+        assert record.triage.disposition == Disposition.UNCERTAIN
     finally:
         triage_mod.LLM_BASE_URL = original
 
@@ -179,19 +176,20 @@ def test_parse_valid_json():
     content = json.dumps({
         "summary": "test", "technique": "T1059.001",
         "technique_name": "PowerShell", "confidence": 0.8,
-        "priority": "high", "verdict": "true_positive",
+        "disposition": "malicious_true_positive",
         "reasoning": "evidence found", "queries_run": [],
     })
     result = _parse_triage_result(content, [])
     assert result is not None
     assert result.technique == "T1059.001"
+    assert result.disposition == Disposition.MALICIOUS_TRUE_POSITIVE
 
 
 def test_parse_strips_markdown_fences():
     content = "```json\n" + json.dumps({
         "summary": "test", "technique": "unknown",
         "technique_name": "unknown", "confidence": 0.3,
-        "priority": "low", "verdict": "uncertain",
+        "disposition": "uncertain",
         "reasoning": "unclear", "queries_run": [],
     }) + "\n```"
     result = _parse_triage_result(content, [])

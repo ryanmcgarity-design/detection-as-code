@@ -58,14 +58,16 @@ class TriageResult(BaseModel):
         description="Confidence in the disposition (0.0-1.0)."
     )
     disposition: Disposition = Field(
-        description="Did bad occur? malicious_true_positive | benign_true_positive | false_positive | uncertain."
+        description=("Did bad occur? malicious_true_positive | benign_true_positive | "
+                     "false_positive | uncertain.")
     )
     reasoning: str = Field(
         description="Justification for the disposition, citing specific evidence retrieved."
     )
     scope: Scope = Field(
         default_factory=Scope,
-        description="Blast radius (systems/users/data/timeframe) — fill only when malicious_true_positive."
+        description=("Blast radius (systems/users/data/timeframe) — "
+                     "fill only when malicious_true_positive.")
     )
     escalate: bool = Field(
         default=False,

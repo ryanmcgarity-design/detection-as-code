@@ -47,7 +47,8 @@ def _attack_data():
         atk = _norm(s["command"])
         first, _, args = atk.partition(" ")
         commands.append((_exe(first), args, s["technique_id"], s["technique_name"]))
-    artifacts = [(a["artifact"], a["technique_id"], a["technique_name"]) for a in d.get("artifacts", [])]
+    artifacts = [(a["artifact"], a["technique_id"], a["technique_name"])
+                 for a in d.get("artifacts", [])]
     return commands, artifacts
 
 

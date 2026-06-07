@@ -32,7 +32,6 @@ import logging
 import os
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -40,7 +39,7 @@ import httpx
 from openai import OpenAI
 from pydantic import ValidationError
 
-from src.detect import DATASETS, build_db, compile_rules, load_events, output_path
+from src.detect import DATASETS, build_db, load_events, output_path
 from src.ground_truth import is_malicious_process_creation
 from src.schema import Disposition, QueryTool, TriageRecord, TriageResult
 from src.triage_fallback import fallback_triage
@@ -74,10 +73,9 @@ MAX_RESULT_ROWS = 20
 LLM_REMOTE_URL = os.environ.get("LLM_REMOTE_URL", "")
 LLM_REMOTE_KEY = os.environ.get("LLM_REMOTE_KEY", "ollama")
 
-# TODO: 1min.ai backend — not implemented yet.
-# When ready, set LLM_BACKEND=1min_ai and implement src/backends/onemin.py.
-# Expected: OpenAI-compatible wrapper that maps their API to the standard interface.
-LLM_BACKEND = os.environ.get("LLM_BACKEND", "local_ollama")  # local_ollama | remote_ollama | 1min_ai
+# Backend selector. 1min_ai uses OneminClient (custom REST, src/backends/onemin.py);
+# remote_ollama uses the OpenAI-compatible client; local_ollama uses native /api/chat.
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "local_ollama")  # local_ollama|remote_ollama|1min_ai
 
 SYSTEM_PROMPT_TOOLS = """\
 You are a SOC analyst investigating Windows endpoint alerts. You have access to
@@ -186,7 +184,7 @@ YOUR JOB — answer one question first, then scope only if needed:
 1. DID BAD OCCUR?  Conclude exactly one disposition:
    - malicious_true_positive : the activity is real AND malicious — bad occurred
    - benign_true_positive    : the activity is real but benign/authorized — no bad
-   - false_positive          : the detection misfired; the flagged activity didn't really happen — no bad
+   - false_positive   : the detection misfired; the flagged activity didn't really happen — no bad
    - uncertain               : the evidence does not let you decide
    If bad did NOT occur, you are done — do not scope.
 
@@ -491,9 +489,11 @@ def _triage_tools_loop(
                 queries_run.append(sql)
                 query_counts[sql] = query_counts.get(sql, 0) + 1
                 if query_counts[sql] >= LOOP_REPEAT_THRESHOLD:
-                    log.warning("Loop detected: query repeated %d times — injecting challenge", query_counts[sql])
+                    log.warning("Loop detected: query repeated %d times — "
+                                "injecting challenge", query_counts[sql])
                     content = (
-                        "You have run this exact query multiple times and already have these results. "
+                        "You have run this exact query multiple times and "
+                        "already have these results. "
                         "What specific evidence are you still looking for? "
                         "Either run a more targeted query with a specific WHERE clause, "
                         "or provide your final verdict based on the evidence gathered so far."
@@ -691,6 +691,10 @@ def _extract_question(text: str) -> Optional[str]:
     return q or None
 
 
+LEDGER_FULL_BLOCKS = 3          # most-recent evidence blocks kept verbatim
+LEDGER_OLD_EVIDENCE_CHARS = 220  # older blocks: keep question + this much of the result
+
+
 def _render_analyst_state(
     alert_core: str,
     evidence_log: list[tuple[str, str]],
@@ -699,11 +703,26 @@ def _render_analyst_state(
     """Build the analyst's full per-turn state as plain text: the alert + the running
     evidence ledger + any reviewer directives. Re-sent fresh each turn (no
     accumulating assistant/tool messages), so there's no tool-call history to corrupt
-    later turns and no model state to manage — the client owns the conversation."""
+    later turns and no model state to manage — the client owns the conversation.
+
+    Ledger shrink: the loop re-sends this state every turn, so a growing full ledger
+    means input tokens climb each turn — the dominant cost on metered backends and the
+    main wall-clock cost locally. We keep the most recent LEDGER_FULL_BLOCKS evidence
+    blocks verbatim and condense older ones to the question + a short head of the
+    result. The question stays visible (so the analyst doesn't re-ask) and the full
+    evidence is still retained in evidence_log for the grounding reviewer."""
     parts = [alert_core, "", "=== EVIDENCE GATHERED SO FAR ==="]
     if evidence_log:
+        cutoff = len(evidence_log) - LEDGER_FULL_BLOCKS
         for i, (q, ev) in enumerate(evidence_log, 1):
-            parts.append(f"[Q{i}] {q}\n→ {ev}")
+            if i <= cutoff:
+                head = ev[:LEDGER_OLD_EVIDENCE_CHARS]
+                ell = (" …[earlier result condensed to save space — already gathered, "
+                       "ask again only if you need the full specifics]"
+                       if len(ev) > LEDGER_OLD_EVIDENCE_CHARS else "")
+                parts.append(f"[Q{i}] {q}\n→ {head}{ell}")
+            else:
+                parts.append(f"[Q{i}] {q}\n→ {ev}")
     else:
         parts.append("(none yet — you have not gathered any evidence)")
     for d in (directives or []):
@@ -831,7 +850,8 @@ def _adversarial_review(
     verdict_text = (
         f"VERDICT\nsummary: {result.summary}\n"
         f"technique: {result.technique} ({result.technique_name})\n"
-        f"disposition: {result.disposition} | escalate: {result.escalate} | confidence: {result.confidence}\n"
+        f"disposition: {result.disposition} | escalate: {result.escalate} | "
+        f"confidence: {result.confidence}\n"
         f"reasoning: {result.reasoning}"
     )
     user = (
@@ -961,8 +981,8 @@ def triage_match(
                    and triage_result.disposition != Disposition.UNCERTAIN
                    and zero_evidence_rounds < ZERO_EVIDENCE_RETRIES):
                 zero_evidence_rounds += 1
-                log.warning("Decisive verdict with ZERO evidence — forcing investigation (round %d)",
-                            zero_evidence_rounds)
+                log.warning("Decisive verdict with ZERO evidence — "
+                            "forcing investigation (round %d)", zero_evidence_rounds)
                 triage_result, fallback_reason = _triage_evidence_loop(
                     analyst_system, alert_core, conn, schema_writer,
                     queries_run, evidence_log, client,
@@ -979,7 +999,8 @@ def triage_match(
                     break
                 grounding_rounds = rnd
                 grounding_unsupported = review["unsupported_claims"]
-                log.warning("Grounding round %d — unsupported: %s", rnd, review["unsupported_claims"])
+                log.warning("Grounding round %d — unsupported: %s",
+                            rnd, review["unsupported_claims"])
                 triage_result, fallback_reason = _triage_evidence_loop(
                     analyst_system, alert_core, conn, schema_writer,
                     queries_run, evidence_log, client,
@@ -1088,7 +1109,8 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
         # "Case" record — the durable, per-model capture for cross-model + quality
         # analysis: the full assessment + the evidence trail it used + the grounding
         # outcome + the ground-truth label (from ground_truth.py, never the LLM).
-        gt_malicious = is_malicious_process_creation(match.get("image", ""), match.get("command_line", ""))
+        gt_malicious = is_malicious_process_creation(
+            match.get("image", ""), match.get("command_line", ""))
         cases.append({
             "model": LLM_MODEL,
             "dataset": dataset_key,
@@ -1117,6 +1139,10 @@ def main(dataset_key: str = "apt3", limit: Optional[int] = None) -> list[TriageR
                  "(%.0f credits/alert avg)",
                  c["credits"], c["calls"], c["input_tokens"], c["output_tokens"],
                  c["credits"] / n if n else 0)
+        log.info("1min.ai per-token rates: %s credits/in-token, %s credits/out-token "
+                 "(in_credits=%s out_credits=%s)",
+                 c["credits_per_input_token"], c["credits_per_output_token"],
+                 c["input_credits"], c["output_credits"])
     return records
 
 

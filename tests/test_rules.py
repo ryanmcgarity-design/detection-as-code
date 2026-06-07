@@ -1,10 +1,12 @@
 import glob
 import uuid
-import yaml
+
 import pytest
+import yaml
 
 RULES_DIR = "rules"
-REQUIRED_FIELDS = ["title", "id", "status", "description", "tags", "logsource", "detection", "level"]
+REQUIRED_FIELDS = ["title", "id", "status", "description",
+                   "tags", "logsource", "detection", "level"]
 VALID_LEVELS = {"low", "medium", "high", "critical"}
 VALID_STATUSES = {"test", "experimental", "stable", "deprecated"}
 

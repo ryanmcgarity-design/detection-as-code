@@ -53,7 +53,8 @@ def build(xlsx_name: str = "apt3_mordor_playbook.xlsx",
     out_path = GT_DIR / out_name
     payload = {"commands": commands, "artifacts": artifacts}
     out_path.write_text(json.dumps(payload, indent=2))
-    print(f"wrote {len(commands)} shell commands + {len(artifacts)} payload artifacts -> {out_path}")
+    print(f"wrote {len(commands)} shell commands + "
+          f"{len(artifacts)} payload artifacts -> {out_path}")
     return len(commands) + len(artifacts)
 
 
