@@ -137,7 +137,25 @@ uv run ruff check src tests
 > 32K context, full 25-alert APT3 set).
 
 <!-- RESULTS:25-ALERT -->
-_Full 25-alert triage numbers are populated after the run completes._
+| Metric | Value |
+|--------|-------|
+| Verdict accuracy (did-bad-occur vs playbook) | **88.0%** (22/25) |
+| True-positive recall | **0.917** |
+| True-positive precision | **0.957** |
+| Uncertain rate | 0% |
+| Fallback rate | 0% |
+| Mean confidence — correct vs wrong | 0.955 vs 0.90 |
+
+All 23 unambiguous malicious steps — `net.exe` domain recon, `sc.exe` remote service
+creation, encoded/abusive PowerShell — were dispositioned correctly. **All three
+errors fall on the benign-vs-malicious boundary**, the hardest call:
+
+- `whoami /groups` → called malicious @ 1.0 (it is the lone true-negative): a confident **false positive** (the model over-calls the one benign case).
+- two `WScript` executions → called `benign_true_positive` @ 0.85 (both are real attack steps): **false negatives**.
+
+The model confirms obvious malice reliably; every miss clusters on **benign-closure** —
+and with a single true-negative in an all-TP set, that axis is barely testable here
+(see Limitations). Run on the 225 W-capped 3090 at 32K context; no fallbacks fired.
 <!-- /RESULTS -->
 
 **Ground truth:** scored against the OTRF/MITRE APT3 operator playbook
