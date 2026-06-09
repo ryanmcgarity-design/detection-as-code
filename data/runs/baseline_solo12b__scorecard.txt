@@ -1,0 +1,32 @@
+
+=== Triage quality [gemma4:12b (solo baseline)] (n=25) ===
+  verdict_accuracy : 88.0%
+  TP recall        : 0.9167   TP precision: 0.9565
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  conf(correct)    : 0.955   conf(wrong): 0.9
+  per-alert:
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\system32\net.exe" group "Domain Admi
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\system32\net.exe" localgroup Adminis
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\system32\net.exe" user /domain
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\system32\net.exe" group "Domain Comp
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\system32\ipconfig.exe" /all
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\system32\whoami.exe" /all /fo list
+    ✗ gt=no_bad                llm=malicious_true_positive conf=1.0  "C:\Windows\system32\whoami.exe" /groups
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "cmd.exe" /c C:\windows\system32\autoupdate.vbs
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  cmd.exe /c "C:\Users\pgustavo\AppData\Roaming\Ad
+    ✗ gt=bad                   llm=benign_true_positive  conf=0.85  "C:\Windows\System32\WScript.exe" "C:\Users\nmar
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\System32\WScript.exe" "C:\windows\sy
+    ✗ gt=bad                   llm=benign_true_positive  conf=0.85  "C:\Windows\System32\WScript.exe" "C:\Users\pgus
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\WINDOWS\system32\sc.exe" \\HFDC01 create Ado
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  powershell.exe -w 1 -enc SQBFAFgAIAAiACgAbgBlAHc
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.9  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=1.0  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
+    ✓ gt=bad                   llm=malicious_true_positive conf=0.95  "C:\Windows\System32\WindowsPowerShell\v1.0\powe
