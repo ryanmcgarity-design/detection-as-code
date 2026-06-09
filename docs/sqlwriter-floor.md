@@ -64,6 +64,39 @@ This reinforces the methodology doc's §3: on-the-fly SQL is the fragile compone
 argues for either a 12B+ SQL-writer **or** pre-vetted/cached queries (the question bank).
 
 Because recall-vs-reference deflates absolutes, the **decisive** test is end-to-end: a
-**role-split** run (small SQL-writer feeding the 12B analyst) scored on triage accuracy. If
-a 3B-SQL-writer + 12B-analyst still hits ~88%, small SQL is viable and the metric was too
-harsh; if accuracy collapses, the floor is real. (Not yet run.)
+**role-split** run (small SQL-writer feeding the 12B analyst) scored on triage accuracy.
+
+## End-to-end validation (role-split triage) — the decisive result
+
+Run with `scripts/rolesplit_sweep.sh` (per-role `SQLWRITER_MODEL` wiring; 12B analyst held
+fixed, SQL-writer swept; both models co-resident via `OLLAMA_MAX_LOADED_MODELS=2`). 5
+alerts (the first-5, all net-recon TPs; 12B-solo baseline = 5/5).
+
+| SQL-writer | size | recall-vs-ref | end-to-end triage |
+|---|:--:|:--:|:--:|
+| gemma4 12b (control) | 12B | 0.67 | **100%** (5/5) |
+| qwen2.5-coder 7b | 7.6B | 0.39 | **100%** |
+| gemma4 e4b | 8B | 0.47 | **100%** |
+| gemma4 e2b | 5.1B | 0.48 | **100%** |
+| qwen2.5-coder 3b | 3.1B | 0.41 | **100%** |
+| qwen2.5-coder 1.5b | 1.5B | 0.31 | **80%** (4/5) |
+
+**1. Recall-vs-reference was too harsh — confirmed.** Every SQL-writer from **3B up**
+held triage at **100%** despite ~0.4 recall against the reference query. Those queries
+were *different but correct enough* for the analyst's verdict. So a **3B SQL-writer + 12B
+analyst is viable** — a ~12× smaller, ~25× faster SQL component (3B ≈ 2 s/call vs 12B ≈
+53 s/call) with **no triage-accuracy loss** on this slice. The recall study alone would
+have wrongly rejected it; **the end-to-end test is what settles it.**
+
+**2. The 1.5B floor failure is graceful, not dangerous.** It dropped to 80%, but the one
+miss went to **`uncertain` + fallback** (conf 0.5) — *not* a confident wrong verdict. TP
+precision stayed 1.0 (no false positives); the grounding/fallback guards caught the weak
+evidence and degraded to "can't conclude." So even past the floor, the system fails safe.
+
+**Practical floor: ~3B** (not the ~12B the recall metric implied), and below it the failure
+is safe rather than silent.
+
+**Caveats:** n=5, all easy net-recon TPs — tests the *common* case, not the hard
+benign-closure alerts (the lone TN / wscript FNs) where SQL grounding may matter more, so
+the floor could be higher there. 80% = 4/5, directional not robust. Natural next step: a
+harder, mixed sample (and on the P40 box, a stronger 31B-dense analyst).

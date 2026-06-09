@@ -1,0 +1,41 @@
+Role-split sweep: analyst=gemma4:12b-it-q8_0, N=5 alerts, Tue Jun  9 07:28:26 AM EDT 2026
+baseline (12b solo, first 5): all malicious_true_positive — see baseline_solo12b__scorecard.txt
+
+================ analyst=12b  sqlwriter=gemma4:12b-it-q8_0 (n=5) ================
+  verdict_accuracy : 100.0%
+  TP recall        : 1.0   TP precision: 1.0
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  per-alert: 5 correct / 0 wrong
+
+================ analyst=12b  sqlwriter=qwen2.5-coder:7b-instruct-q8_0 (n=5) ================
+  verdict_accuracy : 100.0%
+  TP recall        : 1.0   TP precision: 1.0
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  per-alert: 5 correct / 0 wrong
+
+================ analyst=12b  sqlwriter=gemma4:e4b-it-q8_0 (n=5) ================
+  verdict_accuracy : 100.0%
+  TP recall        : 1.0   TP precision: 1.0
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  per-alert: 5 correct / 0 wrong
+
+================ analyst=12b  sqlwriter=gemma4:e2b-it-q8_0 (n=5) ================
+  verdict_accuracy : 100.0%
+  TP recall        : 1.0   TP precision: 1.0
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  per-alert: 5 correct / 0 wrong
+
+================ analyst=12b  sqlwriter=qwen2.5-coder:3b-instruct-q8_0 (n=5) ================
+  verdict_accuracy : 100.0%
+  TP recall        : 1.0   TP precision: 1.0
+  uncertain_rate   : 0.0%   fallback_rate: 0.0%
+  per-alert: 5 correct / 0 wrong
+
+================ analyst=12b  sqlwriter=qwen2.5-coder:1.5b-instruct-q8_0 (n=5) ================
+  verdict_accuracy : 80.0%
+  TP recall        : 0.8   TP precision: 1.0
+  uncertain_rate   : 20.0%   fallback_rate: 20.0%
+    ✗ gt=bad                   llm=uncertain             conf=0.5 [fallback]  "C:\Windows\system32\net.exe" localgroup Adminis
+  per-alert: 4 correct / 1 wrong
+
+Done. Summary: data/runs/_rolesplit_sweep_summary.txt ; per-config: data/runs/rolesplit_n5__*
