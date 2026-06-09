@@ -113,11 +113,22 @@ def run_model(model, questions, conn, schema_writer):
         ok, cand_rows, exec_err = _result_set(conn, sql)
         ref_ok, ref_rows, _ = _result_set(conn, item.get("ref_sql"))
 
-        match = overlap = None
+        match = overlap = recall = over_fetch = contains_ref = None
         if ok and ref_ok:
             match = (cand_rows == ref_rows)
             union = cand_rows | ref_rows
             overlap = (len(cand_rows & ref_rows) / len(union)) if union else 1.0
+            # reference-recall = fraction of reference rows present in the candidate.
+            # THE load-bearing metric: the SQL-writer's job is to get the needle INTO
+            # the set (§5/§8) — a correct-but-broader query should score 1.0 here.
+            recall = (len(cand_rows & ref_rows) / len(ref_rows)) if ref_rows else 1.0
+            contains_ref = ref_rows.issubset(cand_rows)  # full superset = ideal
+            # over-fetch = how much extra it pulls vs the reference (guards against
+            # "win recall by returning the whole table"). >1 = broader, ~1 = tight.
+            if ref_rows:
+                over_fetch = round(len(cand_rows) / len(ref_rows), 2)
+            else:
+                over_fetch = 1.0 if not cand_rows else float(len(cand_rows))
 
         rows.append({
             "i": i, "rule": item.get("rule"), "question": q,
@@ -126,12 +137,20 @@ def run_model(model, questions, conn, schema_writer):
             "nrows": (len(cand_rows) if ok else None),
             "ref_comparable": ref_ok,
             "match": match, "overlap": (round(overlap, 2) if overlap is not None else None),
+            "ref_recall": (round(recall, 2) if recall is not None else None),
+            "contains_ref": contains_ref, "over_fetch": over_fetch,
             "exec_err": exec_err if not ok else None,
             "call_err": call_err, "secs": round(dt, 1),
         })
         print(f"  [{i}/{len(questions)}] gen={sql is not None} valid={ok} "
-              f"rows={len(cand_rows) if ok else '-'} match={match} ov={overlap if overlap is None else round(overlap,2)} {dt:.1f}s")
+              f"rows={len(cand_rows) if ok else '-'} recall={recall if recall is None else round(recall,2)} "
+              f"contains_ref={contains_ref} overfetch={over_fetch} {dt:.1f}s")
     return rows
+
+
+def _median(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else None
 
 
 def score(model, rows):
@@ -142,16 +161,55 @@ def score(model, rows):
     comp = [r for r in rows if r["match"] is not None]
     m = sum(1 for r in comp if r["match"])
     ov = (sum(r["overlap"] for r in comp) / len(comp)) if comp else None
+    rec = (sum(r["ref_recall"] for r in comp) / len(comp)) if comp else None
+    contains = sum(1 for r in comp if r["contains_ref"])
+    overf = _median([r["over_fetch"] for r in comp if r["over_fetch"] is not None])
     return {
         "model": model, "n": n,
         "generated_rate": round(g / n, 3) if n else 0,
         "valid_rate": round(v / n, 3) if n else 0,
         "nonempty_rate": round(ne / n, 3) if n else 0,
         "n_comparable": len(comp),
+        # load-bearing: did the candidate include the reference rows (the needle)?
+        "avg_ref_recall": round(rec, 3) if rec is not None else None,
+        "contains_ref_rate": round(contains / len(comp), 3) if comp else None,
+        "median_over_fetch": overf,
+        # secondary (strict)
         "exact_match_rate": round(m / len(comp), 3) if comp else None,
         "avg_overlap": round(ov, 3) if ov is not None else None,
         "avg_secs": round(sum(r["secs"] for r in rows) / n, 1) if n else 0,
     }
+
+
+def stratify_by_rule(rows):
+    """Per-rule (proxy for question-type) breakdown — find WHERE small models break."""
+    by_rule = {}
+    for r in rows:
+        by_rule.setdefault(r.get("rule") or "?", []).append(r)
+    out = []
+    for rule, rs in sorted(by_rule.items()):
+        comp = [x for x in rs if x["match"] is not None]
+        rec = (sum(x["ref_recall"] for x in comp) / len(comp)) if comp else None
+        out.append({
+            "rule": rule, "n": len(rs),
+            "valid_rate": round(sum(1 for x in rs if x["valid"]) / len(rs), 2),
+            "avg_ref_recall": round(rec, 2) if rec is not None else None,
+        })
+    return out
+
+
+def _param_size(model):
+    """Best-effort param count from the local ollama for size-ordering the curve."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            "http://localhost:11434/api/show",
+            data=json.dumps({"name": model}).encode(), method="POST")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ps = json.load(r).get("details", {}).get("parameter_size", "?")
+        return ps
+    except Exception:
+        return "?"
 
 
 def main():
@@ -177,23 +235,47 @@ def main():
         rows = run_model(model, questions, conn, schema_writer)
         out["results"][model] = rows
         s = score(model, rows)
+        s["param_size"] = _param_size(model)
+        s["by_rule"] = stratify_by_rule(rows)
         out["scores"].append(s)
-        print(f"  -> gen={s['generated_rate']:.0%} valid={s['valid_rate']:.0%} "
-              f"nonempty={s['nonempty_rate']:.0%} match={s['exact_match_rate']} "
-              f"overlap={s['avg_overlap']} avg={s['avg_secs']}s")
+        print(f"  -> valid={s['valid_rate']:.0%} ref_recall={s['avg_ref_recall']} "
+              f"contains_ref={s['contains_ref_rate']} over_fetch={s['median_over_fetch']} "
+              f"(match={s['exact_match_rate']}) avg={s['avg_secs']}s")
+
+    # order the curve by parameter count (small -> large)
+    def _pnum(s):
+        try:
+            return float(str(s.get("param_size", "?")).rstrip("Bb"))
+        except ValueError:
+            return 1e9
+    out["scores"].sort(key=_pnum)
 
     outp = Path("data/runs/sqlwriter_isolation.json")
     outp.write_text(json.dumps(out, indent=2))
     print(f"\nWrote {outp}")
-    print("\n=== SCORECARD ===")
-    hdr = f"{'model':<26}{'gen':>6}{'valid':>7}{'nonemp':>8}{'match':>7}{'overlap':>9}{'avg_s':>7}"
-    print(hdr)
+
+    def fmt(x, pct=False):
+        if x is None:
+            return "-"
+        return f"{x:.0%}" if pct else str(x)
+
+    print("\n=== DEGRADATION CURVE (small -> large) ===")
+    print(f"{'model':<34}{'size':>7}{'valid':>7}{'recall':>8}{'has_ref':>8}"
+          f"{'ovrftch':>8}{'match':>7}{'sec':>6}")
     for s in out["scores"]:
-        print(f"{s['model']:<26}{s['generated_rate']:>6.0%}{s['valid_rate']:>7.0%}"
-              f"{s['nonempty_rate']:>8.0%}"
-              f"{(format(s['exact_match_rate'],'.0%') if s['exact_match_rate'] is not None else '-'):>7}"
-              f"{(s['avg_overlap'] if s['avg_overlap'] is not None else '-')!s:>9}"
-              f"{s['avg_secs']:>7}")
+        print(f"{s['model']:<34}{str(s['param_size']):>7}{s['valid_rate']:>7.0%}"
+              f"{fmt(s['avg_ref_recall']):>8}{fmt(s['contains_ref_rate'], True):>8}"
+              f"{fmt(s['median_over_fetch']):>8}{fmt(s['exact_match_rate'], True):>7}"
+              f"{s['avg_secs']:>6}")
+    print("recall = fraction of reference rows the candidate returned (the needle-in-set "
+          "metric); has_ref = full superset; ovrftch = rows vs reference (lower=tighter).")
+
+    print("\n=== per-rule ref_recall (where models break) ===")
+    rules = sorted({br['rule'] for s in out['scores'] for br in s['by_rule']})
+    print(f"{'model':<34}" + "".join(f"{r[:10]:>11}" for r in rules))
+    for s in out["scores"]:
+        rr = {br['rule']: br['avg_ref_recall'] for br in s['by_rule']}
+        print(f"{s['model']:<34}" + "".join(f"{fmt(rr.get(r)):>11}" for r in rules))
 
 
 if __name__ == "__main__":
