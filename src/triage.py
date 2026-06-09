@@ -58,6 +58,12 @@ LLM_MODE = os.environ.get("LLM_MODE", "evidence")   # evidence | tools | react |
 LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.5"))
 # SQL-writer role runs deterministic (temp 0) — we want repeatable, correct SQL.
 SQL_WRITER_TEMPERATURE = float(os.environ.get("SQL_WRITER_TEMPERATURE", "0.0"))
+# Per-role model split: run the mechanical SQL-writer on a different (cheaper/local)
+# model than the analyst. None -> same model as the analyst (LLM_MODEL). Same backend
+# for both for now; a separate SQLWRITER_BACKEND (SQL-local / analyst-remote) is a
+# further extension. NOTE on local_ollama: both models must stay VRAM-resident or Ollama
+# swaps them every turn — set OLLAMA_MAX_LOADED_MODELS>=2 for the split to be fast.
+SQLWRITER_MODEL = os.environ.get("SQLWRITER_MODEL") or None
 # Hard cap on tokens per turn. Bounds runaway generation (a model that never
 # emits a stop token would otherwise generate until it fills the whole context
 # window). Largest legitimate turn observed was ~4.5k (reasoning + 8 tool calls).
@@ -404,13 +410,14 @@ def _parse_triage_result(content: str, queries_run: list[str]) -> Optional[Triag
         return None
 
 
-def _chat(client, messages: list[dict]) -> str:
+def _chat(client, messages: list[dict], model: Optional[str] = None) -> str:
     """Unified single-turn call supporting OpenAI client and OneminClient."""
     from src.backends.onemin import OneminClient
+    model = model or LLM_MODEL
     if isinstance(client, OneminClient):
-        return client.chat(LLM_MODEL, messages)
+        return client.chat(model, messages)
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=model,
         messages=messages,
         temperature=LLM_TEMPERATURE,
         max_tokens=LLM_MAX_TOKENS,
@@ -577,6 +584,7 @@ def _ollama_chat(
     think: Optional[bool] = None,
     temperature: Optional[float] = None,
     num_predict: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> dict:
     """Call Ollama's native /api/chat. Stateless like /v1: the full `messages`
     array is sent each call. Returns the parsed response dict; response["message"]
@@ -592,7 +600,7 @@ def _ollama_chat(
     if LLM_NUM_CTX is not None:
         options["num_ctx"] = LLM_NUM_CTX
     payload: dict = {
-        "model": LLM_MODEL,
+        "model": model or LLM_MODEL,
         "messages": messages,
         "stream": False,
     }
@@ -625,6 +633,7 @@ def _llm_chat(
     think: Optional[bool] = None,
     temperature: Optional[float] = None,
     num_predict: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> str:
     """Backend-agnostic single-turn chat — returns the assistant's text content.
 
@@ -640,10 +649,10 @@ def _llm_chat(
     """
     if LLM_BACKEND == "local_ollama":
         data = _ollama_chat(messages, think=think, temperature=temperature,
-                            num_predict=num_predict)
+                            num_predict=num_predict, model=model)
         return (data.get("message") or {}).get("content") or ""
     # Remote / OpenAI-compatible backends (remote_ollama, 1min_ai).
-    return _chat(client, messages)
+    return _chat(client, messages, model=model)
 
 
 def _get_evidence(
@@ -662,7 +671,8 @@ def _get_evidence(
         {"role": "user", "content": f"Analyst request: {question}"},
     ]
     try:
-        raw = _llm_chat(writer_messages, client, temperature=SQL_WRITER_TEMPERATURE)
+        raw = _llm_chat(writer_messages, client, temperature=SQL_WRITER_TEMPERATURE,
+                        model=SQLWRITER_MODEL)
     except Exception as e:
         return f"Could not generate a query ({type(e).__name__}). Rephrase the request."
     sql = _extract_sql(raw)
